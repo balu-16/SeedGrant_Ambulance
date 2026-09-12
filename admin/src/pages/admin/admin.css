@@ -1,0 +1,334 @@
+/**
+ * ADMIN pages local styles — selects, checkboxes, bar charts, map layout and
+ * misc helpers, all on the theme tokens from styles/theme.css. Loaded by the
+ * pages that need it; the shared kit styles stay untouched in styles/ui.css.
+ */
+
+/* ---- Forms: select + checkbox rows (Field covers inputs only) ---- */
+.admin-select {
+  border: none;
+  outline: none;
+  padding: 4px 0;
+  min-height: 26px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--navy);
+  background: transparent;
+  width: 100%;
+  font-family: inherit;
+}
+
+.admin-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-field);
+  background: var(--white);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--navy);
+  cursor: pointer;
+}
+
+.admin-check:hover {
+  border-color: var(--blue);
+}
+
+.admin-check input {
+  accent-color: var(--blue);
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.admin-check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+/* ---- States ---- */
+.admin-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 26px;
+}
+
+.admin-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-color: var(--red-light);
+}
+
+.admin-inline-error {
+  color: var(--red);
+  font-size: 13px;
+  line-height: 18px;
+  background: var(--red-light);
+  border-radius: var(--radius-field);
+  padding: 10px 12px;
+}
+
+/* ---- Bar charts (Analytics) ---- */
+.admin-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.admin-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.admin-bar-label {
+  width: 132px;
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-bar-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 6px;
+  background: var(--blue-light);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.admin-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 6px;
+  background: var(--blue);
+}
+
+.admin-bar-fill--green {
+  background: var(--green);
+}
+
+.admin-bar-fill--purple {
+  background: var(--purple);
+}
+
+.admin-bar-fill--red {
+  background: var(--red);
+}
+
+.admin-bar-fill--neutral {
+  background: var(--muted);
+}
+
+.admin-bar-value {
+  width: 44px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 700;
+  color: var(--heading);
+}
+
+/* ---- Key/value definition lists (drawers, config check) ---- */
+.admin-kv {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.admin-kv-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.admin-kv-row dt {
+  width: 40%;
+  max-width: 190px;
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+}
+
+.admin-kv-row dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--navy);
+}
+
+/* ---- Monospace + one-line clamps ---- */
+.admin-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.admin-clamp {
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+/* ---- Cards grid (hospitals, analytics, config) ---- */
+.admin-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+/* ---- Live map ---- */
+.admin-map-grid {
+  display: grid;
+  grid-template-columns: 296px minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+@media (max-width: 1000px) {
+  .admin-map-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.admin-map-box {
+  position: relative;
+  height: 560px;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--card-border);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  background: var(--blue-light);
+}
+
+/* Explicit sizing + own stacking context so panes never cover the Drawer. */
+.admin-map-box .leaflet-container {
+  position: relative;
+  z-index: 0;
+  height: 100%;
+  width: 100%;
+}
+
+.admin-pin {
+  background: none;
+  border: none;
+}
+
+.admin-dot {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--white);
+  box-shadow: 0 1px 4px rgba(10, 27, 70, 0.45);
+}
+
+.admin-dot--blue {
+  background: var(--blue);
+}
+
+.admin-dot--red {
+  background: var(--red);
+}
+
+.admin-dot--pulse {
+  animation: admin-pulse 1.5s ease-out infinite;
+}
+
+@keyframes admin-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 47, 60, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(245, 47, 60, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 47, 60, 0);
+  }
+}
+
+.admin-session-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-field);
+  background: var(--white);
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+
+.admin-session-row:hover {
+  border-color: var(--blue);
+}
+
+.admin-session-row--active,
+.admin-session-row--active:hover {
+  border-color: var(--blue);
+  background: var(--blue-light);
+}
+
+.admin-session-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-scroll {
+  max-height: 440px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ---- Toolbar (filters above tables) ---- */
+.admin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.admin-toolbar .field {
+  min-height: 46px;
+  flex: 1;
+  min-width: 200px;
+}
+
+/* ---- Tables: clickable rows ---- */
+.admin-row-click tbody tr {
+  cursor: pointer;
+}
+
+.admin-details summary {
+  cursor: pointer;
+}

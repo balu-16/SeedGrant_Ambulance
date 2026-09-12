@@ -215,3 +215,16 @@ export function listDetections(params: { junction_id?: string; limit?: number } 
 export function isCriticalAlert(type: AlertType): boolean {
   return type === "device_offline" || type === "session_timed_out";
 }
+
+// ---- self service (HOSPITAL / POLICE) ---------------------------------------
+
+/** Change the signed-in user's password (other sessions are signed out). */
+export function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ changed: true }> {
+  return request("/auth/change-password", {
+    method: "POST",
+    body: { current_password: currentPassword, new_password: newPassword },
+  });
+}
