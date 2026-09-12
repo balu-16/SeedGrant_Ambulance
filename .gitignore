@@ -16,3 +16,6 @@ __pycache__/
 
 # Client has its own git repository
 client/
+
+# ZCode local session config
+.zcode/
