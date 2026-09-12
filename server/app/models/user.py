@@ -1,0 +1,34 @@
+import uuid
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(16), default="DRIVER", index=True)  # ADMIN | DRIVER
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    refresh_version: Mapped[int] = mapped_column(
+        default=0
+    )  # bumped on logout; invalidates old refresh tokens
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    ambulances: Mapped[list["Ambulance"]] = relationship("Ambulance", back_populates="driver")
+
+
+class Ambulance(Base):
+    __tablename__ = "ambulances"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    vehicle_no: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    driver_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    driver: Mapped["User | None"] = relationship("User", back_populates="ambulances")

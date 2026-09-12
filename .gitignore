@@ -1,0 +1,18 @@
+# Secrets & large artifacts — never commit real credentials or weights.
+.env
+*.pt
+*firebase-adminsdk*.json
+**/google-services.json
+.venv/
+node_modules/
+
+# Tool & OS caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+
+# Client has its own git repository
+client/

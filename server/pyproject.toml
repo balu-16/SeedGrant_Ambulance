@@ -1,0 +1,70 @@
+[project]
+name = "edge-ai-traffic-backend"
+version = "0.1.0"
+description = "Edge-AI Based Adaptive Traffic Management System with Intelligent Ambulance Priority - Central Backend"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pyjwt>=2.8",
+    "pwdlib[bcrypt]>=0.2",
+    "aiomqtt>=2.0",
+    "httpx>=0.27",
+    "structlog>=24.1",
+    "python-multipart>=0.0.9",
+    "email-validator>=2.0",
+    "psycopg[binary]>=3.1",
+    # Vision (YOLO best.pt, CPU-friendly for Pi parity):
+    # install torch CPU via: uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+    "ultralytics>=8.3",
+    "pillow>=10.0",
+    "numpy>=1.26",
+    # Push (Expo Push Service; Firebase Admin reserved for direct FCM later)
+    "firebase-admin>=6.5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "aiosqlite>=0.20",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/*" = ["E501", "E402", "I001"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.alembic]
+script_location = "alembic"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
