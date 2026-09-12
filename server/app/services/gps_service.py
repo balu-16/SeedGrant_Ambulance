@@ -32,6 +32,19 @@ def _command_payload(cmd: EmergencyCommand, ctype: str, junction_id: str, approa
     }
 
 
+async def publish_command(cmd: EmergencyCommand, junction_id: str, approach: str) -> bool:
+    """Publish a command to the junction's MQTT command topic.
+
+    Shared by the GPS pipeline and manual overrides so every published command
+    carries the same spec-complete payload."""
+    from app.integrations.mqtt import publish_safe, topic_for
+
+    return await publish_safe(
+        topic_for(junction_id, "command"),
+        _command_payload(cmd, cmd.command_type, junction_id, approach),
+    )
+
+
 async def process_gps(
     db,
     session,
@@ -98,13 +111,9 @@ async def process_gps(
                 continue  # nothing to release for this junction
             result_cmd = await cmds.create_release(db, session.id, j.id, last_cmd.approach)
             session.status = "CROSSING"
-            from app.integrations.mqtt import publish_safe, topic_for
             from app.integrations.notify import notify_user
 
-            await publish_safe(
-                topic_for(jid, "command"),
-                _command_payload(result_cmd, "RELEASE_PRIORITY", jid, last_cmd.approach),
-            )
+            await publish_command(result_cmd, jid, last_cmd.approach)
             await notify_user(
                 db, session.driver_id, "Junction crossed", f"Priority released at {j.name}."
             )
@@ -116,14 +125,10 @@ async def process_gps(
             )
             if session.status in ("ACTIVE", "APPROACHING_JUNCTION", "CROSSING"):
                 session.status = "PRIORITY_REQUESTED"
-            from app.integrations.mqtt import publish_safe, topic_for
             from app.integrations.notify import notify_user
 
             if should_publish:  # newly created OR re-armed from EXPIRED
-                await publish_safe(
-                    topic_for(jid, "command"),
-                    _command_payload(cmd, "PRIORITY_REQUEST", jid, approach_dir),
-                )
+                await publish_command(cmd, jid, approach_dir)
                 await notify_user(
                     db,
                     session.driver_id,

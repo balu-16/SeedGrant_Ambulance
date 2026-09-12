@@ -11,6 +11,7 @@ from app.core.exceptions import Forbidden, Unauthorized
 from app.core.security import decode_token
 from app.db.session import get_session
 from app.models.device import Device
+from app.models.junction import PoliceAssignment
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -48,6 +49,28 @@ def require_role(*roles: str):
         return user
 
     return _dep
+
+
+def require_any(*roles: str):
+    """Portal-facing alias of require_role — allow ANY of the listed roles."""
+    return require_role(*roles)
+
+
+def hospital_scope(user) -> uuid.UUID | None:
+    """hospital_id for HOSPITAL-scoped queries (ADMIN/others have none → None)."""
+    return getattr(user, "hospital_id", None)
+
+
+async def police_junction_ids(db: AsyncSession, user) -> list[uuid.UUID]:
+    """Junction ids assigned to a POLICE user (empty = sees/controls nothing)."""
+    if getattr(user, "role", None) != "POLICE":
+        return []
+    rows = (
+        await db.execute(
+            select(PoliceAssignment.junction_id).where(PoliceAssignment.user_id == user.id)
+        )
+    ).scalars().all()
+    return list(rows)
 
 
 def hash_api_key(raw: str) -> str:

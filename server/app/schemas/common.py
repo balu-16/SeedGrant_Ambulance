@@ -29,15 +29,69 @@ class RefreshIn(BaseModel):
     refresh_token: str
 
 
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=72)
+
+
 class AmbulanceIn(BaseModel):
     vehicle_no: str = Field(min_length=1, max_length=32)  # DB column is String(32)
     driver_id: uuid.UUID | None = None
+    hospital_id: uuid.UUID | None = None
 
 
 class AmbulanceAssignIn(BaseModel):
     """PATCH /ambulances/{aid} body — driver_id null unassigns the driver."""
 
     driver_id: uuid.UUID | None = None
+    hospital_id: uuid.UUID | None = None
+    on_duty: bool | None = None  # maps to ambulances.is_active
+    vehicle_no: str | None = Field(default=None, min_length=1, max_length=32)
+
+
+# Portal roles a ADMIN may assign (public register stays DRIVER-only).
+PORTAL_ROLES = ("ADMIN", "HOSPITAL", "POLICE", "DRIVER")
+_ROLE_PATTERN = "^(ADMIN|HOSPITAL|POLICE|DRIVER)$"
+
+
+class AdminUserCreateIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=72)
+    role: str = Field(pattern=_ROLE_PATTERN)
+    hospital_id: uuid.UUID | None = None  # required-ish for HOSPITAL users
+    junction_ids: list[uuid.UUID] = []  # POLICE only
+
+
+class AdminUserPatchIn(BaseModel):
+    is_active: bool | None = None
+    role: str | None = Field(default=None, pattern=_ROLE_PATTERN)
+    hospital_id: uuid.UUID | None = None  # present-and-null clears the assignment
+    junction_ids: list[uuid.UUID] | None = None  # present → replace (POLICE only)
+
+
+class AdminPasswordResetIn(BaseModel):
+    new_password: str | None = Field(default=None, min_length=8, max_length=72)
+
+
+class HospitalIn(BaseModel):
+    name: str = Field(min_length=1, max_length=128)  # DB column is String(128)
+    address: str = Field(default="", max_length=255)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    phone: str = Field(default="", max_length=32)
+
+
+class HospitalPatchIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    address: str | None = Field(default=None, max_length=255)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    phone: str | None = Field(default=None, max_length=32)
+
+
+class OverrideIn(BaseModel):
+    action: str = Field(pattern="^(FORCE_RELEASE|HOLD|REISSUE)$")
+    reason: str = Field(min_length=5, max_length=512)
 
 
 class JunctionIn(BaseModel):

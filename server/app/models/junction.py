@@ -22,6 +22,23 @@ class Junction(Base):
     )
 
 
+class PoliceAssignment(Base):
+    """Junction a POLICE portal user may see/override (user_id ↔ junction_id)."""
+
+    __tablename__ = "police_assignments"
+    __table_args__ = (
+        UniqueConstraint("user_id", "junction_id", name="uq_police_assignment_user_junction"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    junction_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("junctions.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Approach(Base):
     __tablename__ = "approaches"
     __table_args__ = (

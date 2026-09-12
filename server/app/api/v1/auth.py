@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.dependencies import get_current_user, get_db
@@ -12,10 +13,17 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.models.junction import PoliceAssignment
 from app.models.profile import DriverProfile
 from app.models.user import User
 from app.repositories.user_repo import get_user_by_email, get_user_by_id
-from app.schemas.common import LoginIn, ProfileIn, RefreshIn, RegisterIn
+from app.schemas.common import (
+    ChangePasswordIn,
+    LoginIn,
+    ProfileIn,
+    RefreshIn,
+    RegisterIn,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -86,9 +94,45 @@ async def logout(db=Depends(get_db), user=Depends(get_current_user)):
     return {"success": True, "data": {"logged_out": True}}
 
 
+@router.post("/change-password")
+async def change_password(
+    body: ChangePasswordIn, db=Depends(get_db), user=Depends(get_current_user)
+):
+    """Self-service password change: revokes all refresh tokens on success."""
+    if not verify_password(body.current_password, user.password_hash):
+        raise Unauthorized("Current password is incorrect")
+    try:
+        user.password_hash = hash_password(body.new_password)
+    except ValueError as e:
+        raise AppError(str(e), status_code=422, code="WEAK_PASSWORD") from None
+    user.refresh_version = (user.refresh_version or 0) + 1
+    await db.commit()
+    return {"success": True, "data": {"changed": True}}
+
+
 @router.get("/me")
-async def me(user=Depends(get_current_user)):
-    return {"success": True, "data": {"id": str(user.id), "email": user.email, "role": user.role}}
+async def me(user=Depends(get_current_user), db=Depends(get_db)):
+    # Portal scope: hospital owners bind to one hospital, police to junctions.
+    junction_ids: list[str] = []
+    if user.role == "POLICE":
+        rows = (
+            await db.execute(
+                select(PoliceAssignment.junction_id).where(
+                    PoliceAssignment.user_id == user.id
+                )
+            )
+        ).scalars().all()
+        junction_ids = [str(j) for j in rows]
+    return {
+        "success": True,
+        "data": {
+            "id": str(user.id),
+            "email": user.email,
+            "role": user.role,
+            "hospital_id": str(user.hospital_id) if user.hospital_id else None,
+            "junction_ids": junction_ids,
+        },
+    }
 
 
 def _profile_out(p: DriverProfile) -> dict:

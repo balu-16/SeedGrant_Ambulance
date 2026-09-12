@@ -245,3 +245,70 @@ async def insert_priority_command(db_factory, junction_id: uuid.UUID) -> Emergen
         await s.commit()
         await s.refresh(cmd)
         return cmd
+
+
+# ---- portal (admin portal phase 1) helpers ----------------------------------
+
+
+async def make_hospital(client, admin, name: str) -> dict:
+    """Hospital created through the ADMIN API."""
+    r = await client.post(
+        "/api/v1/admin/hospitals",
+        json={"name": name, "address": f"{name} HQ", "latitude": 12.9, "longitude": 77.5},
+        headers=admin["headers"],
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["data"]
+
+
+async def make_portal_user(
+    client,
+    admin,
+    email: str,
+    role: str,
+    *,
+    hospital_id: str | None = None,
+    junction_ids: list[str] | None = None,
+) -> dict:
+    """Portal user created through POST /admin/users (password = PASSWORD)."""
+    body: dict = {"email": email, "password": PASSWORD, "role": role}
+    if hospital_id:
+        body["hospital_id"] = hospital_id
+    if junction_ids is not None:
+        body["junction_ids"] = junction_ids
+    r = await client.post("/api/v1/admin/users", json=body, headers=admin["headers"])
+    assert r.status_code == 200, r.text
+    return r.json()["data"]
+
+
+async def make_hospital_fleet(client, admin, db_factory, tag: str) -> dict:
+    """Scoping cell: hospital + HOSPITAL user + DRIVER + ambulance + ACTIVE session."""
+    hospital = await make_hospital(client, admin, f"Hospital {tag}")
+    user = await make_portal_user(
+        client, admin, f"owner.{tag.lower()}@example.com", "HOSPITAL", hospital_id=hospital["id"]
+    )
+    driver = await make_user(db_factory, f"driver.{tag.lower()}@example.com", role="DRIVER")
+    r = await client.post(
+        "/api/v1/ambulances",
+        json={
+            "vehicle_no": f"{tag}-{uuid.uuid4().hex[:6].upper()}",
+            "driver_id": str(driver.id),
+            "hospital_id": hospital["id"],
+        },
+        headers=admin["headers"],
+    )
+    assert r.status_code == 200, r.text
+    ambulance = r.json()["data"]
+    r = await client.post(
+        "/api/v1/emergencies/start",
+        json={"ambulance_id": ambulance["id"]},
+        headers=await login_headers(client, driver.email),
+    )
+    assert r.status_code == 200, r.text
+    return {
+        "hospital": hospital,
+        "user": user,
+        "driver": driver,
+        "ambulance": ambulance,
+        "session": r.json()["data"],
+    }

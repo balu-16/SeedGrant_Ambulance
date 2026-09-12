@@ -1,0 +1,554 @@
+/**
+ * UI kit styles — mirrors client/components/ui.tsx StyleSheet 1:1.
+ * Card 16px radius + #EBF1FB border + soft shadow, 17px gradient buttons,
+ * 12px fields, 20px pill badges, app typography sizes.
+ */
+
+/* ---- Txt ---- */
+.txt {
+  color: var(--navy);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.txt--muted {
+  color: var(--muted);
+}
+
+/* ---- Card ---- */
+.card {
+  background: var(--white);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  padding: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+/* ---- Badge (tone = light bg + solid text, same mapping as the app) ---- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: var(--radius-badge);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.badge--green {
+  background: var(--green-light);
+  color: var(--green);
+}
+
+.badge--purple {
+  background: var(--purple-light);
+  color: var(--purple);
+}
+
+.badge--red {
+  background: var(--red-light);
+  color: var(--red);
+}
+
+.badge--blue {
+  background: var(--blue-light);
+  color: var(--blue);
+}
+
+.badge--neutral {
+  background: var(--blue-light);
+  color: var(--muted);
+}
+
+/* ---- Button (gradient like the app: #4C9AFF→#1475FF / #FF4850→#EA2632) ---- */
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 14px 22px;
+  border: none;
+  border-radius: var(--radius-btn);
+  font-size: 17px;
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--white);
+  box-shadow: var(--shadow-card);
+  transition: opacity 0.15s ease, transform 0.05s ease;
+}
+
+.btn:hover:not(:disabled) {
+  opacity: 0.92;
+}
+
+.btn:active:not(:disabled) {
+  opacity: 0.8;
+}
+
+.btn:disabled {
+  opacity: 0.65;
+}
+
+.btn--primary {
+  background: var(--grad-blue);
+}
+
+.btn--danger {
+  background: var(--grad-red);
+}
+
+.btn--quiet {
+  background: var(--blue-light);
+  color: var(--blue);
+  box-shadow: none;
+}
+
+.btn--block {
+  width: 100%;
+}
+
+.btn-spinner {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255, 255, 255, 0.35);
+  border-top-color: var(--white);
+  animation: spin 0.8s linear infinite;
+}
+
+.btn--quiet .btn-spinner {
+  border-color: rgba(20, 117, 255, 0.25);
+  border-top-color: var(--blue);
+}
+
+/* ---- Field (icon + small bold label over the input, like the app) ---- */
+.field-wrap {
+  display: block;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 64px;
+  padding: 9px 14px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-field);
+  transition: border-color 0.15s ease;
+}
+
+.field:focus-within {
+  border-color: var(--blue);
+}
+
+.field--error {
+  border-color: var(--red);
+}
+
+.field-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.field-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--navy);
+  margin-bottom: 1px;
+}
+
+.field-input {
+  border: none;
+  outline: none;
+  padding: 4px 0;
+  min-height: 26px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--navy);
+  background: transparent;
+  width: 100%;
+}
+
+.field-eye {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.field-eye:hover {
+  background: var(--blue-light);
+}
+
+.field-error {
+  display: block;
+  color: var(--red);
+  font-size: 12px;
+  line-height: 16px;
+  margin-top: 5px;
+}
+
+/* ---- StatCard ---- */
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.stat-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.stat-icon--blue {
+  background: var(--blue-light);
+  color: var(--blue);
+}
+
+.stat-icon--green {
+  background: var(--green-light);
+  color: var(--green);
+}
+
+.stat-icon--red {
+  background: var(--red-light);
+  color: var(--red);
+}
+
+.stat-icon--purple {
+  background: var(--purple-light);
+  color: var(--purple);
+}
+
+.stat-icon--neutral {
+  background: var(--pale);
+  color: var(--muted);
+}
+
+.stat-label {
+  display: block;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+}
+
+.stat-value {
+  display: block;
+  font-size: 26px;
+  line-height: 32px;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  color: var(--heading);
+  white-space: nowrap;
+}
+
+/* ---- Table ---- */
+.table-wrap {
+  padding: 0;
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th {
+  text-align: left;
+  padding: 12px 16px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--navy);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table tbody tr:hover td {
+  background: var(--blue-light);
+}
+
+.table .table-col--right {
+  text-align: right;
+}
+
+/* ---- Timeline (vertical dots, like the app History) ---- */
+.timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+.timeline-row {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+}
+
+.timeline-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 14px;
+  flex-shrink: 0;
+}
+
+.timeline-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex-shrink: 0;
+  background: var(--blue);
+}
+
+.timeline-dot--green {
+  background: var(--green);
+}
+
+.timeline-dot--red {
+  background: var(--red);
+}
+
+.timeline-dot--neutral {
+  background: var(--muted);
+}
+
+.timeline-line {
+  width: 2px;
+  flex: 1;
+  min-height: 18px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.timeline-meta {
+  display: block;
+  font-size: 12px;
+  line-height: 16px;
+  margin-top: 2px;
+}
+
+/* ---- Empty (icon + title + body in a centered Card) ---- */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 30px 24px;
+  text-align: center;
+}
+
+.empty-title {
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 700;
+}
+
+.empty-body {
+  max-width: 420px;
+}
+
+/* ---- PageHeader (app Header: 26px bold title + muted subtitle) ---- */
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  margin-bottom: 2px;
+}
+
+.page-head-title {
+  font-size: 26px;
+  line-height: 32px;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  color: var(--navy);
+}
+
+.page-head-subtitle {
+  margin-top: 3px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+/* ---- Avatar (initials circle) ---- */
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--blue-light);
+  color: var(--blue);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.avatar--sm {
+  width: 34px;
+  height: 34px;
+  font-size: 12px;
+}
+
+.avatar--on-dark {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--white);
+}
+
+/* ---- Drawer (right slide-over, web counterpart of the app's Sheet) ---- */
+.drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  visibility: hidden;
+  transition: visibility 0s linear 0.25s;
+}
+
+.drawer-root--open {
+  pointer-events: auto;
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--backdrop);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.drawer-root--open .drawer-backdrop {
+  opacity: 1;
+}
+
+.drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  max-width: 92vw;
+  background: var(--pale);
+  border-radius: 26px 0 0 26px;
+  box-shadow: -8px 0 30px rgba(10, 27, 70, 0.18);
+  transform: translateX(105%);
+  transition: transform 0.25s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-root--open .drawer {
+  transform: translateX(0);
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  padding: 12px 20px 0 20px;
+}
+
+.drawer-title {
+  flex: 1;
+  font-size: 21px;
+  line-height: 28px;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.drawer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--navy);
+}
+
+.drawer-close:hover {
+  background: var(--blue-light);
+}
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---- SectionTitle / Row helpers ---- */
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  margin-top: 5px;
+}
+
+.section-title-text {
+  font-size: 19px;
+  line-height: 26px;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}

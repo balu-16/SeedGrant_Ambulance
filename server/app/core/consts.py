@@ -9,3 +9,7 @@ ACTIVE_SESSION_STATUSES = (
     "CROSSING",
 )
 TERMINAL_SESSION_STATUSES = ("COMPLETED", "CANCELLED", "TIMED_OUT")
+
+# Command statuses that still require action (not terminal yet) — used by the
+# portal live view and the manual-override logic.
+OPEN_COMMAND_STATUSES = ("PENDING", "SENT", "ACKNOWLEDGED")

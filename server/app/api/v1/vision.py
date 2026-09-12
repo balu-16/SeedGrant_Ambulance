@@ -4,7 +4,7 @@ The model is loaded lazily by app.services.detect (singleton, CPU default);
 these handlers never load weights themselves. /vision/classes and /vision/detect
 require auth (a user bearer token with any role, or a device API key via
 X-Device-Api-Key) so the driver app / dashboard / Pi can all use them; the
-detections listing is ADMIN-only (rows span all junctions).
+detections listing is ADMIN (all junctions) and POLICE (assigned junctions only).
 """
 
 import uuid
@@ -15,7 +15,14 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.dependencies import get_current_user, get_db, require_role, user_or_device
+from app.core.dependencies import (
+    get_current_user,
+    get_db,
+    police_junction_ids,
+    require_any,
+    user_or_device,
+)
+from app.core.exceptions import Forbidden
 from app.models.junction import Junction
 from app.models.profile import Detection
 from app.schemas.common import DetectionIn
@@ -140,17 +147,23 @@ async def ingest_detections(
 @router.get("/detections")
 async def list_detections(
     db=Depends(get_db),
-    _=Depends(require_role("ADMIN")),
+    user=Depends(require_any("ADMIN", "POLICE")),
     junction_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
 ):
     """Recent detection records for counts/dashboard (newest first).
 
-    ADMIN-only: rows span all junctions, so exposing them to DRIVER tokens
-    would leak cross-tenant data.
+    ADMIN sees all junctions; POLICE is scoped to their assigned junctions
+    (a junction_id outside their assignments is a 403). DRIVER tokens are
+    rejected — rows span junctions.
     """
-    q = select(Detection).order_by(desc(Detection.detected_at)).limit(limit)
+    q = select(Detection).order_by(desc(Detection.detected_at))
+    if user.role == "POLICE":
+        pids = await police_junction_ids(db, user)
+        if junction_id and junction_id not in pids:
+            raise Forbidden("Junction not assigned to you")
+        q = q.where(Detection.junction_id.in_(pids))
     if junction_id:
         q = q.where(Detection.junction_id == junction_id)
-    rows = (await db.execute(q)).scalars().all()
+    rows = (await db.execute(q.limit(limit))).scalars().all()
     return {"success": True, "data": [_detection_out(d) for d in rows]}
