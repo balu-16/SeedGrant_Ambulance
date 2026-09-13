@@ -1,5 +1,10 @@
 # Admin Portal — Detailed Plan
 
+> **Status (2026-09-13): IMPLEMENTED** — all phases shipped. All persona pages are
+> wired to the backend; the built portal is served by FastAPI at `/admin`
+> (base path + SPA fallback in `server/app/main.py`). Deliberately not built:
+> SSE live streams (10 s polling is used) and portal e2e tests.
+
 Web-based control portal for the SeedGrant emergency-priority system. Three personas:
 **ADMIN** (full control over everything), **HOSPITAL** (hospital owners, fleet-scoped),
 **POLICE** (junction traffic authority, junction-scoped).
