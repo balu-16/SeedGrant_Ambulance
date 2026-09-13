@@ -24,12 +24,13 @@ class Settings(BaseSettings):
     JWT_ISSUER: str = "seedgrant"
     JWT_AUDIENCE: str = "seedgrant-clients"
 
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://localhost:8081"
     ENVIRONMENT: str = "dev"
     DEVICE_OFFLINE_AFTER_SECONDS: int = 120
 
     DEFAULT_JUNCTION_RADIUS_M: float = 500.0
     COMMAND_TTL_SECONDS: int = 60
+    MAX_COMMAND_RETRIES: int = 20  # re-arm cap per command; at the cap it stays EXPIRED
     EMERGENCY_TTL_MINUTES: int = 60
     INACTIVITY_TIMEOUT_MINUTES: int = 5
     MIN_MOVING_SPEED_MS: float = 2.0
@@ -45,6 +46,9 @@ class Settings(BaseSettings):
     # ---- Rate limiting (in-memory sliding window, per client IP) ----
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_AUTH_PER_MINUTE: int = 30  # POST /api/v1/auth/* and POST /api/v1/vision/detect
+    # Only set true behind a reverse proxy that overwrites X-Forwarded-For;
+    # otherwise clients can spoof it to get a fresh rate-limit bucket per request.
+    TRUST_PROXY_HEADERS: bool = False
 
     # ---- MQTT (EMQX / HiveMQ plain MQTT(S)) ----
     MQTT_PROVIDER: str = "mock"  # mock | real
@@ -57,13 +61,10 @@ class Settings(BaseSettings):
     MQTT_RECONNECT_MAX_DELAY_SECONDS: int = 30  # supervised reconnect backoff cap
     MQTT_OUTBOX_MAX: int = 500  # messages queued while offline; oldest dropped beyond this
 
-    # ---- Vision (YOLO best.pt — repo root, lazy-loaded, CPU default for Pi) ----
-    MODEL_PATH: str = "../best.pt"
-    MODEL_DEVICE: str = "cpu"
-    MODEL_CONF: float = 0.25
-
     # ---- Push (Expo Push Service; Firebase Admin reserved for direct FCM) ----
-    FIREBASE_CREDENTIALS_PATH: str = "../seedgrant-9dc6f-firebase-adminsdk-fbsvc-4eefced32e.json"
+    # The Firebase Admin JSON is unused by the app (push goes through Expo);
+    # leave empty unless a direct-FCM path is ever implemented.
+    FIREBASE_CREDENTIALS_PATH: str = ""
 
     @field_validator("MQTT_PROVIDER")
     @classmethod
@@ -110,8 +111,18 @@ def validate_startup_config() -> list[str]:
         )
     if len(s.JWT_SECRET) < 32:
         warnings.append("JWT_SECRET < 32 chars (ok for dev, fix before prod)")
+    if s.is_prod and not s.mqtt_is_real:
+        # mock "succeeds" into an in-memory list — a silent total failure of
+        # the product's core function if it ever shipped to production
+        raise AppError(
+            "MQTT_PROVIDER must be 'real' in production (mock never delivers commands)",
+            code="BAD_CONFIG",
+            status_code=500,
+        )
     if s.mqtt_is_real and ("localhost" in s.MQTT_BROKER_URL or s.MQTT_USERNAME == "mock-user"):
         warnings.append("MQTT_PROVIDER=real but broker URL/credentials look like mock values")
+    if s.mqtt_is_real and s.MQTT_BROKER_URL.startswith("mqtt://"):
+        warnings.append("MQTT broker URL is not TLS (mqtts://) — commands go in cleartext")
     if not s.SUPABASE_URL:
         warnings.append("SUPABASE_URL empty — REST features disabled, direct Postgres only")
     return warnings

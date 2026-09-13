@@ -21,6 +21,66 @@ from .conftest import (
     make_user,
 )
 
+
+async def test_telemetry_history_police_scoped(client, admin, junction):
+    other = (
+        await client.post(
+            "/api/v1/junctions",
+            json={"name": "No Telemetry Junction", "latitude": 15.0, "longitude": 79.0},
+            headers=admin["headers"],
+        )
+    ).json()["data"]
+    officer = await _officer(client, admin, "telemetry.cop@example.com", [junction["id"]])
+
+    # own junction: 200 (empty history is fine); ADMIN also 200
+    r = await client.get(
+        "/api/v1/telemetry", params={"junction_id": junction["id"]}, headers=officer["headers"]
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()["data"]
+    assert set(body) == {"items", "limit", "offset"}  # paged shape the portal must read
+    ra = await client.get(
+        "/api/v1/telemetry", params={"junction_id": junction["id"]}, headers=admin["headers"]
+    )
+    assert ra.status_code == 200
+
+    # unassigned junction → 403
+    r = await client.get(
+        "/api/v1/telemetry", params={"junction_id": other["id"]}, headers=officer["headers"]
+    )
+    assert r.status_code == 403
+
+
+async def test_devices_status_police_scoped(client, admin, junction, device):
+    other = (
+        await client.post(
+            "/api/v1/junctions",
+            json={"name": "Other Device Junction", "latitude": 16.0, "longitude": 80.0},
+            headers=admin["headers"],
+        )
+    ).json()["data"]
+    await client.post(
+        "/api/v1/admin/devices/register",
+        params={"junction_id": other["id"], "name": "Pi-Other"},
+        headers=admin["headers"],
+    )
+    officer = await _officer(client, admin, "devices.cop@example.com", [junction["id"]])
+
+    r = await client.get("/api/v1/admin/devices/status", headers=officer["headers"])
+    assert r.status_code == 200, r.text
+    rows = r.json()["data"]
+    assert len(rows) == 1
+    assert rows[0]["junction_id"] == junction["id"]
+
+    # officer with no assignments sees nothing (not every device)
+    lone = await _officer(client, admin, "devices.cop2@example.com", [])
+    r = await client.get("/api/v1/admin/devices/status", headers=lone["headers"])
+    assert r.status_code == 200 and r.json()["data"] == []
+
+    # ADMIN still sees both devices
+    ra = await client.get("/api/v1/admin/devices/status", headers=admin["headers"])
+    assert len(ra.json()["data"]) == 2
+
 pytestmark = pytest.mark.asyncio
 
 

@@ -18,8 +18,17 @@ def correlation_id(session_id, junction_id, approach: str, ctype: str, suffix: s
 
 
 def _maybe_rearm(cmd: EmergencyCommand, cfg, now) -> bool:
-    """Re-arm an expired command: back to PENDING with a bumped retry_count."""
-    if cmd.status == "EXPIRED" and cmd.expires_at < now:
+    """Re-arm an expired command: back to PENDING with a bumped retry_count.
+
+    Capped at cfg.MAX_COMMAND_RETRIES so a vehicle loitering in the geofence
+    cannot republish forever; at the cap the command stays EXPIRED (terminal).
+    HELD commands (manual override) are never re-armed here.
+    """
+    if (
+        cmd.status == "EXPIRED"
+        and cmd.expires_at < now
+        and (cmd.retry_count or 0) < cfg.MAX_COMMAND_RETRIES
+    ):
         cmd.status = "PENDING"
         cmd.expires_at = now + timedelta(seconds=cfg.COMMAND_TTL_SECONDS)
         cmd.retry_count = (cmd.retry_count or 0) + 1

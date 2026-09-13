@@ -4,7 +4,7 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import desc, distinct, func, or_, select
+from sqlalchemy import desc, distinct, false, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.devices import _audit
@@ -107,7 +107,9 @@ async def config_check(_=Depends(require_role("ADMIN"))):
         "data": {
             "mqtt_provider": s.MQTT_PROVIDER,
             "supabase_configured": bool(
-                s.SUPABASE_URL and not s.SUPABASE_ANON_KEY.startswith("PASTE_")
+                s.SUPABASE_URL
+                and s.SUPABASE_ANON_KEY
+                and not s.SUPABASE_ANON_KEY.startswith("PASTE_")
             ),
             "environment": s.ENVIRONMENT,
         },
@@ -115,10 +117,17 @@ async def config_check(_=Depends(require_role("ADMIN"))):
 
 
 @router.get("/devices/status")
-async def devices_status(db=Depends(get_db), _=Depends(require_role("ADMIN"))):
+async def devices_status(db=Depends(get_db), user=Depends(require_any("ADMIN", "POLICE"))):
+    """Device health — ADMIN all, POLICE only devices at assigned junctions."""
     await sweep_timeouts(db)
     await db.commit()
-    rows = (await db.execute(select(Device))).scalars().all()
+    q = select(Device)
+    if user.role == "POLICE":
+        pids = await police_junction_ids(db, user)
+        if not pids:
+            return {"success": True, "data": []}
+        q = q.where(Device.junction_id.in_(pids))
+    rows = (await db.execute(q)).scalars().all()
     return {
         "success": True,
         "data": [
@@ -149,11 +158,20 @@ async def all_emergencies(
     offset = max(0, offset)
     q = select(EmergencySession).order_by(desc(EmergencySession.started_at))
     if status:
-        q = q.where(EmergencySession.status == status.upper())
+        st = status.upper()
+        # "ACTIVE" means the whole in-flight family, not just the literal status
+        q = q.where(
+            EmergencySession.status.in_(ACTIVE_SESSION_STATUSES)
+            if st == "ACTIVE"
+            else EmergencySession.status == st
+        )
     if user.role == "HOSPITAL":
+        scope = hospital_scope(user)
+        if scope is None:  # unassigned HOSPITAL user: see nothing
+            return {"success": True, "data": {"items": [], "limit": limit, "offset": offset}}
         q = q.where(
             EmergencySession.ambulance_id.in_(
-                select(Ambulance.id).where(Ambulance.hospital_id == user.hospital_id)
+                select(Ambulance.id).where(Ambulance.hospital_id == scope)
             )
         )
     rows = (await db.execute(q.limit(limit).offset(offset))).scalars().all()
@@ -200,7 +218,10 @@ async def fleet_drivers(db=Depends(get_db), user=Depends(require_any("ADMIN", "H
     """Drivers directory derived from the visible fleet (ambulance assignments)."""
     q = select(Ambulance).where(Ambulance.driver_id.isnot(None))
     if user.role == "HOSPITAL":
-        q = q.where(Ambulance.hospital_id == user.hospital_id)
+        scope = hospital_scope(user)
+        if scope is None:  # unassigned HOSPITAL user: see nothing
+            return {"success": True, "data": []}
+        q = q.where(Ambulance.hospital_id == scope)
     rows = (await db.execute(q)).scalars().all()
     driver_ids = {a.driver_id for a in rows}
     users = {
@@ -256,6 +277,14 @@ async def create_user(
     body: AdminUserCreateIn, db=Depends(get_db), admin=Depends(require_role("ADMIN"))
 ):
     """Create a portal user (public /auth/register stays DRIVER-only)."""
+    if body.role == "HOSPITAL" and not body.hospital_id:
+        # a hospital-less HOSPITAL user would otherwise match `hospital_id IS
+        # NULL` scope filters and see every unassigned ambulance
+        raise AppError(
+            "hospital_id is required for HOSPITAL users",
+            code="VALIDATION_ERROR",
+            status_code=422,
+        )
     if body.hospital_id:
         await _require_hospital(db, body.hospital_id)
     try:
@@ -263,7 +292,7 @@ async def create_user(
     except ValueError as e:
         raise AppError(str(e), code="VALIDATION_ERROR", status_code=422) from None
     u = User(
-        email=body.email,
+        email=body.email.lower(),
         password_hash=pw_hash,
         role=body.role,
         hospital_id=body.hospital_id or None,
@@ -360,6 +389,12 @@ async def update_user(
             db.add(PoliceAssignment(user_id=u.id, junction_id=jid))
             jids.append(str(jid))
         changes["junction_ids"] = jids
+    if u.role == "HOSPITAL" and u.hospital_id is None:
+        raise AppError(
+            "HOSPITAL users require a hospital_id",
+            code="VALIDATION_ERROR",
+            status_code=422,
+        )
     _audit(
         db,
         str(admin.id),
@@ -421,7 +456,10 @@ async def reset_user_password(
 async def list_hospitals(db=Depends(get_db), user=Depends(require_any("ADMIN", "HOSPITAL"))):
     q = select(Hospital).order_by(Hospital.name)
     if user.role != "ADMIN":
-        q = q.where(Hospital.id == hospital_scope(user))
+        scope = hospital_scope(user)
+        if scope is None:  # unassigned HOSPITAL user: see nothing
+            return {"success": True, "data": []}
+        q = q.where(Hospital.id == scope)
     rows = (await db.execute(q)).scalars().all()
     return {"success": True, "data": [_hospital_out(h) for h in rows]}
 
@@ -503,9 +541,13 @@ async def live(db=Depends(get_db), user=Depends(require_any("ADMIN", "HOSPITAL",
         .join(User, User.id == EmergencySession.driver_id)
         .where(EmergencySession.status.in_(ACTIVE_SESSION_STATUSES))
         .order_by(desc(EmergencySession.started_at))
+        .limit(100)  # live view cap — the portal dashboard cannot usefully show more
     )
     if user.role == "HOSPITAL":
-        q = q.where(Ambulance.hospital_id == hospital_scope(user))
+        scope = hospital_scope(user)
+        if scope is None:  # unassigned HOSPITAL user: see nothing
+            return {"success": True, "data": {"items": []}}
+        q = q.where(Ambulance.hospital_id == scope)
     elif user.role == "POLICE":
         q = q.where(
             EmergencySession.id.in_(
@@ -530,17 +572,37 @@ async def live(db=Depends(get_db), user=Depends(require_any("ADMIN", "HOSPITAL",
             cq = cq.where(EmergencyCommand.junction_id.in_(pids))
         for c in (await db.execute(cq)).scalars().all():
             open_cmds.setdefault(c.session_id, []).append(c)
+    # latest GPS point per session in ONE query (row_number window), replacing
+    # the per-session N+1 lookup
+    latest_gps_by_session: dict[uuid.UUID, GpsPoint] = {}
+    if rows:
+        sids = [r[0].id for r in rows]
+        rn_sq = (
+            select(
+                GpsPoint.id.label("pid"),
+                func.row_number()
+                .over(
+                    partition_by=GpsPoint.session_id,
+                    order_by=desc(GpsPoint.recorded_at),
+                )
+                .label("rn"),
+            )
+            .where(GpsPoint.session_id.in_(sids))
+            .subquery()
+        )
+        for g in (
+            (
+                await db.execute(
+                    select(GpsPoint).join(rn_sq, GpsPoint.id == rn_sq.c.pid).where(rn_sq.c.rn == 1)
+                )
+            )
+            .scalars()
+            .all()
+        ):
+            latest_gps_by_session[g.session_id] = g
     items = []
     for s, amb, drv in rows:
-        # latest GPS point per session (subquery)
-        gps = (
-            await db.execute(
-                select(GpsPoint)
-                .where(GpsPoint.session_id == s.id)
-                .order_by(desc(GpsPoint.recorded_at))
-                .limit(1)
-            )
-        ).scalar_one_or_none()
+        gps = latest_gps_by_session.get(s.id)
         items.append(
             {
                 "id": str(s.id),
@@ -585,6 +647,8 @@ async def alerts(
     offline_cutoff = now - timedelta(seconds=s.DEVICE_OFFLINE_AFTER_SECONDS)
     day_cutoff = now - timedelta(hours=24)
     pids = await police_junction_ids(db, user) if user.role == "POLICE" else []
+    # unassigned HOSPITAL user: match nothing (false()), never IS NULL
+    hosp_scope = hospital_scope(user) if user.role == "HOSPITAL" else None
     feed: list[tuple[datetime, dict]] = []
 
     # devices bind to junctions (not hospitals) → device alerts are ADMIN/POLICE only
@@ -615,13 +679,16 @@ async def alerts(
         EmergencyCommand.expires_at >= day_cutoff,
     )
     if user.role == "HOSPITAL":
-        cq = cq.where(
-            EmergencyCommand.session_id.in_(
-                select(EmergencySession.id)
-                .join(Ambulance, Ambulance.id == EmergencySession.ambulance_id)
-                .where(Ambulance.hospital_id == hospital_scope(user))
+        if hosp_scope is None:
+            cq = cq.where(false())
+        else:
+            cq = cq.where(
+                EmergencyCommand.session_id.in_(
+                    select(EmergencySession.id)
+                    .join(Ambulance, Ambulance.id == EmergencySession.ambulance_id)
+                    .where(Ambulance.hospital_id == hosp_scope)
+                )
             )
-        )
     elif user.role == "POLICE":
         cq = cq.where(EmergencyCommand.junction_id.in_(pids))
     for c in (await db.execute(cq)).scalars().all():
@@ -648,7 +715,10 @@ async def alerts(
         .where(EmergencySession.status == "TIMED_OUT", EmergencySession.ended_at >= day_cutoff)
     )
     if user.role == "HOSPITAL":
-        sq = sq.where(Ambulance.hospital_id == hospital_scope(user))
+        if hosp_scope is None:
+            sq = sq.where(false())
+        else:
+            sq = sq.where(Ambulance.hospital_id == hosp_scope)
     elif user.role == "POLICE":
         sq = sq.where(
             EmergencySession.id.in_(
@@ -694,7 +764,9 @@ async def analytics_overview(
     )
     if user.role == "HOSPITAL":
         session_ids_subq = session_ids_subq.where(
-            Ambulance.hospital_id == hospital_scope(user)
+            false()
+            if hospital_scope(user) is None
+            else Ambulance.hospital_id == hospital_scope(user)
         )
     elif user.role == "POLICE":
         session_ids_subq = session_ids_subq.where(

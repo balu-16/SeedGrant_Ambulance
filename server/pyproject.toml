@@ -20,13 +20,6 @@ dependencies = [
     "python-multipart>=0.0.9",
     "email-validator>=2.0",
     "psycopg[binary]>=3.1",
-    # Vision (YOLO best.pt, CPU-friendly for Pi parity):
-    # install torch CPU via: uv pip install torch --index-url https://download.pytorch.org/whl/cpu
-    "ultralytics>=8.3",
-    "pillow>=10.0",
-    "numpy>=1.26",
-    # Push (Expo Push Service; Firebase Admin reserved for direct FCM later)
-    "firebase-admin>=6.5",
 ]
 
 [tool.hatch.build.targets.wheel]

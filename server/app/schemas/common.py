@@ -22,7 +22,8 @@ class RegisterIn(BaseModel):
 
 class LoginIn(BaseModel):
     email: EmailStr
-    password: str
+    # capped at the bcrypt limit so absurdly long bodies never hit the hasher
+    password: str = Field(min_length=1, max_length=72)
 
 
 class RefreshIn(BaseModel):
@@ -30,7 +31,7 @@ class RefreshIn(BaseModel):
 
 
 class ChangePasswordIn(BaseModel):
-    current_password: str
+    current_password: str = Field(min_length=1, max_length=72)
     new_password: str = Field(min_length=8, max_length=72)
 
 
@@ -130,6 +131,13 @@ class DetectionIn(BaseModel):
     class_name: str = Field(default="", max_length=32)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     bbox: dict = {}
+
+    @field_validator("bbox")
+    @classmethod
+    def _bbox_size(cls, v: dict) -> dict:
+        # JSONB cap: an authenticated user could otherwise bloat detections
+        # with arbitrarily large bbox payloads (up to 200 rows per batch)
+        return _check_payload(v)
 
 
 class TelemetryIn(BaseModel):

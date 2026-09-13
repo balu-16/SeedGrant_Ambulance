@@ -63,8 +63,10 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     s = get_settings()
     app = FastAPI(title="Edge-AI Traffic Management", version="1.0.0", lifespan=lifespan)
-    app.add_middleware(RequestIdMiddleware)
+    # Starlette: last-added middleware is OUTERMOST. RateLimit must be inner to
+    # RequestId so its 429 short-circuit can read request.state.request_id.
     app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=s.cors_origins_list,
@@ -109,6 +111,35 @@ def create_app() -> FastAPI:
         vision.router,
     ):
         app.include_router(r, prefix="/api/v1")
+
+    # Built admin portal (admin/dist, vite base=/admin/) — guarded so dev
+    # servers without a portal build keep working unchanged.
+    from pathlib import Path
+
+    admin_dist = Path(__file__).resolve().parents[2] / "admin" / "dist"
+    if (admin_dist / "index.html").is_file():
+        from fastapi.responses import FileResponse
+        from fastapi.staticfiles import StaticFiles
+
+        assets = admin_dist / "assets"
+        if assets.is_dir():
+            app.mount(
+                "/admin/assets", StaticFiles(directory=assets), name="admin-assets"
+            )
+
+        @app.get("/admin", include_in_schema=False)
+        @app.get("/admin/{rest:path}", include_in_schema=False)
+        async def admin_spa(rest: str = ""):
+            candidate = (admin_dist / rest).resolve()
+            # serve real files (favicon.svg, …); SPA-fallback everything else
+            if (
+                rest
+                and candidate.is_file()
+                and admin_dist.resolve() in candidate.parents
+            ):
+                return FileResponse(candidate)
+            return FileResponse(admin_dist / "index.html")
+
     return app
 
 

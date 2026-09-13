@@ -36,10 +36,13 @@ def _encode(payload: dict, expires: timedelta) -> str:
     return jwt.encode(payload, s.JWT_SECRET, algorithm=s.JWT_ALGORITHM)
 
 
-def create_access_token(sub: str, role: str) -> str:
+def create_access_token(sub: str) -> str:
+    # role is deliberately NOT a claim: authorization always re-derives the
+    # role from the DB (dependencies.get_current_user), so a stale claim in a
+    # long-lived token would be misleading dead weight.
     s = get_settings()
     return _encode(
-        {"sub": sub, "role": role, "type": "access"},
+        {"sub": sub, "type": "access"},
         timedelta(minutes=s.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
 

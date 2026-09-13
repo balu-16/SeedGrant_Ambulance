@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, select
 
 from app.core.config import get_settings
-from app.core.consts import ACTIVE_SESSION_STATUSES
+from app.core.consts import ACTIVE_SESSION_STATUSES, TERMINAL_SESSION_STATUSES
 from app.core.logging import get_logger
 from app.models.device import Device, Heartbeat, Telemetry
 from app.models.emergency import EmergencyCommand, EmergencySession, GpsPoint
@@ -111,6 +111,29 @@ async def purge_expired_data(db, now: datetime | None = None, counts: dict | Non
     ):
         res = await db.execute(delete(model).where(ts_col < cutoff))
         counts[label] = res.rowcount or 0
+
+    # terminal emergency sessions age out too (commands have no ondelete FK,
+    # so delete children first: gps_points → commands → sessions)
+    term_sq = select(EmergencySession.id).where(
+        EmergencySession.status.in_(TERMINAL_SESSION_STATUSES),
+        EmergencySession.ended_at.isnot(None),
+        EmergencySession.ended_at < cutoff,
+    )
+    res = await db.execute(delete(GpsPoint).where(GpsPoint.session_id.in_(term_sq)))
+    counts["gps_points_purged"] = counts.get("gps_points_purged", 0) + (res.rowcount or 0)
+    res = await db.execute(
+        delete(EmergencyCommand).where(EmergencyCommand.session_id.in_(term_sq))
+    )
+    counts["emergency_commands_purged"] = res.rowcount or 0
+    res = await db.execute(
+        delete(EmergencySession).where(
+            EmergencySession.status.in_(TERMINAL_SESSION_STATUSES),
+            EmergencySession.ended_at.isnot(None),
+            EmergencySession.ended_at < cutoff,
+        )
+    )
+    counts["emergency_sessions_purged"] = res.rowcount or 0
+
     if any(counts.values()):
         log.info("retention_purge", cutoff=cutoff.isoformat(), **counts)
     return counts

@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.consts import ACTIVE_SESSION_STATUSES
 from app.core.exceptions import Conflict, Forbidden, NotFound
@@ -94,7 +95,16 @@ async def start_session(db, ambulance, user, hospital: str | None = None) -> Eme
         hospital=hospital or None,
     )
     db.add(s)
-    await db.flush()
+    try:
+        # savepoint: the partial unique indexes on (ambulance_id)/(driver_id)
+        # for active sessions are the real concurrency guard; a lost race must
+        # surface as 409, not as a poisoned transaction / 500
+        async with db.begin_nested():
+            await db.flush()
+    except IntegrityError:
+        raise Conflict(
+            "Emergency session already active for this ambulance or driver"
+        ) from None
     return s
 
 

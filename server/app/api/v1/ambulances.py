@@ -50,6 +50,19 @@ async def create_amb(
         hospital_id = user.hospital_id
     elif hospital_id:
         await _require_hospital(db, hospital_id)
+    if body.driver_id is not None:
+        driver = (
+            await db.execute(select(User).where(User.id == body.driver_id))
+        ).scalar_one_or_none()
+        if not driver:
+            raise NotFound("Driver not found")
+        clash = (
+            await db.execute(
+                select(Ambulance).where(Ambulance.driver_id == body.driver_id)
+            )
+        ).scalar_one_or_none()
+        if clash:
+            raise Conflict("Driver is already assigned to another ambulance")
     a = Ambulance(vehicle_no=body.vehicle_no, driver_id=body.driver_id, hospital_id=hospital_id)
     db.add(a)
     await db.flush()
@@ -77,7 +90,10 @@ async def list_ambulances(db=Depends(get_db), user=Depends(require_any("ADMIN", 
     """Fleet list — ADMIN sees all, HOSPITAL only its own hospital's ambulances."""
     q = select(Ambulance).order_by(Ambulance.created_at.desc())
     if user.role == "HOSPITAL":
-        q = q.where(Ambulance.hospital_id == hospital_scope(user))
+        scope = hospital_scope(user)
+        if scope is None:  # unassigned HOSPITAL user: see nothing, not IS NULL
+            return {"success": True, "data": []}
+        q = q.where(Ambulance.hospital_id == scope)
     rows = (await db.execute(q)).scalars().all()
     return {"success": True, "data": [_amb_out(a) for a in rows]}
 
@@ -87,7 +103,7 @@ async def my_ambulance(db=Depends(get_db), user=Depends(get_current_user)):
     """Ambulance assigned to the logged-in driver (driver app profile)."""
     row = (
         await db.execute(select(Ambulance).where(Ambulance.driver_id == user.id))
-    ).scalar_one_or_none()
+    ).scalars().first()
     if not row:
         raise NotFound("No ambulance assigned to this driver")
     return {
@@ -120,9 +136,11 @@ async def update_ambulance(
     if not a:
         raise NotFound("Ambulance not found")
     if user.role == "HOSPITAL":
-        if a.hospital_id != user.hospital_id:
+        scope = hospital_scope(user)
+        # an unassigned HOSPITAL user owns nothing (None == None would pass!)
+        if scope is None or a.hospital_id != scope:
             raise Forbidden("Not your hospital's ambulance")
-        if body.hospital_id and body.hospital_id != user.hospital_id:
+        if body.hospital_id and body.hospital_id != scope:
             raise Forbidden("Cannot move an ambulance to another hospital")
     if body.driver_id is not None:
         driver = (
@@ -130,6 +148,15 @@ async def update_ambulance(
         ).scalar_one_or_none()
         if not driver:
             raise NotFound("Driver not found")
+        clash = (
+            await db.execute(
+                select(Ambulance).where(
+                    Ambulance.driver_id == body.driver_id, Ambulance.id != a.id
+                )
+            )
+        ).scalar_one_or_none()
+        if clash:
+            raise Conflict("Driver is already assigned to another ambulance")
     changes: dict = {}
     previous = str(a.driver_id) if a.driver_id else None
     new_driver = str(body.driver_id) if body.driver_id else None

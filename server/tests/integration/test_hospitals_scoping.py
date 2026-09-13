@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from .conftest import PASSWORD, make_hospital, make_hospital_fleet
+from .conftest import PASSWORD, login_headers, make_hospital, make_hospital_fleet, make_user
 
 pytestmark = pytest.mark.asyncio
 
@@ -117,6 +117,46 @@ async def test_hospital_user_ambulance_registration_scope(client, admin, db_fact
     r = await client.post("/api/v1/ambulances", json={"vehicle_no": "OWN-01"}, headers=ha)
     assert r.status_code == 200, r.text
     assert r.json()["data"]["hospital_id"] == a["hospital"]["id"]
+
+
+async def test_hospitalless_hospital_user_sees_nothing(client, admin, db_factory):
+    """A HOSPITAL user with no hospital must see zero rows everywhere — the old
+    `hospital_id == user.hospital_id` filter compiled to IS NULL and leaked
+    every unassigned ambulance (and allowed PATCHing them)."""
+    orphan = await make_user(db_factory, "orphan.owner@example.com", role="HOSPITAL")
+    ho = await login_headers(client, orphan.email)
+
+    # an ambulance with NO hospital exists — exactly what the old filter leaked
+    unowned = (
+        await client.post(
+            "/api/v1/ambulances", json={"vehicle_no": "ORPHAN-01"}, headers=admin["headers"]
+        )
+    ).json()["data"]
+    assert unowned["hospital_id"] is None
+
+    r = await client.get("/api/v1/ambulances", headers=ho)
+    assert r.status_code == 200 and r.json()["data"] == []
+
+    # cross-tenant write on the unowned ambulance must be forbidden
+    r = await client.patch(
+        f"/api/v1/ambulances/{unowned['id']}",
+        json={"driver_id": None, "vehicle_no": "HIJACK-01"},
+        headers=ho,
+    )
+    assert r.status_code == 403
+
+    r = await client.get("/api/v1/admin/live", headers=ho)
+    assert r.status_code == 200 and r.json()["data"]["items"] == []
+    r = await client.get("/api/v1/admin/emergencies", headers=ho)
+    assert r.status_code == 200 and r.json()["data"]["items"] == []
+    r = await client.get("/api/v1/admin/fleet/drivers", headers=ho)
+    assert r.status_code == 200 and r.json()["data"] == []
+    r = await client.get("/api/v1/admin/hospitals", headers=ho)
+    assert r.status_code == 200 and r.json()["data"] == []
+    r = await client.get("/api/v1/admin/alerts", headers=ho)
+    assert r.status_code == 200 and r.json()["data"] == []
+    r = await client.get("/api/v1/admin/analytics/overview", headers=ho)
+    assert r.status_code == 200 and r.json()["data"]["emergencies"]["total"] == 0
 
 
 async def test_admin_hospital_crud_and_duplicate_name(client, admin):

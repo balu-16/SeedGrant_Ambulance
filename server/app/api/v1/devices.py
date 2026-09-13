@@ -6,7 +6,14 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.dependencies import device_from_key, get_db, hash_api_key, require_role
+from app.core.dependencies import (
+    device_from_key,
+    get_db,
+    hash_api_key,
+    police_junction_ids,
+    require_any,
+    require_role,
+)
 from app.core.exceptions import Conflict, Forbidden, NotFound
 from app.models.device import AuditLog, Device, Heartbeat, Telemetry
 from app.models.junction import Junction
@@ -100,8 +107,11 @@ async def telemetry_history(
     limit: int = 50,
     offset: int = 0,
     db=Depends(get_db),
-    _=Depends(require_role("ADMIN")),
+    user=Depends(require_any("ADMIN", "POLICE")),
 ):
+    """Telemetry history for a junction — ADMIN anywhere, POLICE on assigned junctions."""
+    if user.role == "POLICE" and junction_id not in await police_junction_ids(db, user):
+        raise Forbidden("Junction not assigned to you")
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     rows = (

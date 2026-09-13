@@ -2,8 +2,8 @@
 
 - a push token is bound to the FIRST user that registers it; a second account
   re-registering the same token must get 409 (hijack guard)
-- vision endpoints require user-or-device auth; the detections listing is
-  ADMIN-only
+- the detections ingest/list endpoints require user auth; the listing is
+  ADMIN-only (POLICE scoped to assigned junctions)
 """
 
 import pytest
@@ -57,12 +57,7 @@ async def test_push_register_requires_auth(client):
 async def test_vision_endpoints_reject_anonymous(client):
     r = await client.get("/api/v1/vision/detections")
     assert r.status_code == 401
-    r = await client.get("/api/v1/vision/classes")
-    assert r.status_code == 401
-    # multipart body so the 401 comes from authz, not from a missing file field
-    r = await client.post(
-        "/api/v1/vision/detect", files={"file": ("tiny.jpg", b"not-an-image")}
-    )
+    r = await client.post("/api/v1/vision/detections", json=[])
     assert r.status_code == 401
 
 

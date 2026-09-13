@@ -10,7 +10,7 @@ Flow: health → admin login → create Mumbai test junction → driver login �
 my ambulance → start emergency → stream 12 GPS fixes into the geofence →
 assert priority requested + command issued → device pending/ack →
 stop → history → profile round-trip → detection ingest/list →
-push register/list/delete → vision classes →
+push register/list/delete →
 logout + revoked-refresh check. Each step prints PASS/FAIL/SKIP;
 exit code is 1 when any step fails.
 """
@@ -65,7 +65,6 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Live E2E against real backend services.")
     ap.add_argument("--base", default="http://localhost:8000")
     ap.add_argument("--gap", type=float, default=3.0, help="seconds between GPS fixes")
-    ap.add_argument("--image", default="", help="optional traffic photo for vision detect")
     args = ap.parse_args()
 
     base = args.base.rstrip("/")
@@ -227,23 +226,6 @@ def main() -> int:
         r["player_id"] == fake for r in body.get("data", [])), f"http {code}")
     code, _ = req(c, "DELETE", f"/api/v1/push/{fake}", token=driver_tok)
     check("push delete", code == 200, f"http {code}")
-
-    # 10. Vision classes (+ detect when --image is given).
-    code, body = req(c, "GET", "/api/v1/vision/classes")
-    n = len(body.get("data", {}).get("classes", {}))
-    check("vision classes", code == 200 and n == 13, f"{n} classes")
-    if args.image:
-        raw = Path(args.image).read_bytes()
-        r = c.post(
-            "/api/v1/vision/detect",
-            files={"file": ("test.jpg", raw, "image/jpeg")},
-            timeout=120.0,
-        )
-        d = r.json().get("data", {})
-        check("vision detect", r.status_code == 200,
-              f"{d.get('count')} dets, {d.get('latency_ms')}ms")
-    else:
-        results.append(("vision detect (image)", "SKIP", "pass --image <photo>"))
 
     # 11. Logout revokes refresh.
     code, _ = req(c, "POST", "/api/v1/auth/logout", token=driver_tok)

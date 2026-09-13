@@ -9,11 +9,6 @@ cd server
 uv venv
 source .venv/bin/activate   # venv has no pip; installs via uv pip (see below)
 uv sync
-# vision/push extras (torch CPU + ultralytics + firebase-admin):
-uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu torch
-uv pip install --python .venv/bin/python --force-reinstall --no-cache \
-  --index-url https://download.pytorch.org/whl/cpu torchvision
-uv pip install --python .venv/bin/python ultralytics pillow "numpy>=1.26" firebase-admin
 cp .env.example .env   # replace every PASTE_* (see below)
 python scripts/check_env.py   # preflight: fails with per-var guidance
 alembic upgrade head
@@ -21,6 +16,10 @@ python -m app.db.seed
 python -m pytest
 python main.py                # serve on 0.0.0.0:8000 (flags: --port, --reload)
 ```
+
+Local Postgres without Supabase: `docker compose up -d db` from the repo root, then set
+`DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/trafficdb` and the
+matching `SYNC_DATABASE_URL` in `.env`.
 
 Run the live end-to-end check against real Supabase (needs DB access):
 ```bash
@@ -38,10 +37,8 @@ admin `admin@demo.io / Admin123!`, ambulance `AP39-0001`, device `PI-BENZ-01`.
 | `DATABASE_URL` | Supabase pooler asyncpg URL `:6543 ?ssl=require` |
 | `SYNC_DATABASE_URL` | Supabase direct URI `:5432` (Database → Connect) |
 | `JWT_SECRET` | `openssl rand -hex 32` (≥32 chars) |
-| `MQTT_*` + `MQTT_PROVIDER=real` | EMQX/HiveMQ cluster connection info |
-| `MODEL_PATH`, `MODEL_DEVICE`, `MODEL_CONF` | Path to `best.pt` (repo root), device, confidence |
-| `FIREBASE_CREDENTIALS_PATH` | Server Firebase Admin JSON at repo root (reserved — not required for Expo push) |
-| Tuning (optional) | `GPS_MAX_AGE_SECONDS`, `SWEEP_MIN_INTERVAL_SECONDS`, `DATA_RETENTION_DAYS`, `RATE_LIMIT_ENABLED`, `RATE_LIMIT_AUTH_PER_MINUTE`, `MQTT_OUTBOX_MAX`, `MQTT_RECONNECT_MAX_DELAY_SECONDS`, `JWT_ISSUER`, `JWT_AUDIENCE` |
+| `MQTT_*` + `MQTT_PROVIDER=real` | EMQX/HiveMQ cluster connection info (`ENVIRONMENT=prod` refuses to boot with `MQTT_PROVIDER=mock`) |
+| Tuning (optional) | `GPS_MAX_AGE_SECONDS`, `MAX_COMMAND_RETRIES`, `SWEEP_MIN_INTERVAL_SECONDS`, `DATA_RETENTION_DAYS`, `RATE_LIMIT_ENABLED`, `RATE_LIMIT_AUTH_PER_MINUTE`, `TRUST_PROXY_HEADERS`, `MQTT_OUTBOX_MAX`, `MQTT_RECONNECT_MAX_DELAY_SECONDS`, `JWT_ISSUER`, `JWT_AUDIENCE` |
 
 Providers default to `mock` so everything boots/tests without keys.
 
@@ -71,5 +68,12 @@ seed only. Refresh tokens rotate on every refresh; a rotated token is rejected.
   `POST /emergencies/{id}/stop|cancel`, `GET /emergencies/history`
 - `GET /commands/pending?junction_id`, `POST /commands/{id}/ack`, `GET /commands/admin/list`
 - `GET /admin/devices/status`, `GET /admin/emergencies`, `POST /admin/sweep`, `GET /admin/config-check`
-- `GET /vision/classes`, `POST /vision/detect` (YOLO best.pt upload; requires a user token or `X-Device-Api-Key`)
+- `POST|GET /vision/detections` (Pi-side inference ingest + portal listing; the server runs no model)
 - `GET /health`, `GET /ready` (503 when DB down)
+
+## Admin portal hosting
+
+After `cd ../admin && npm run build`, the API serves the portal at
+`http://localhost:8000/admin/` (SPA fallback included) — same origin, so the portal's
+`/api/v1` base needs no CORS. Dev alternative: `npm run dev` in `admin/` (Vite proxies
+`/api` to :8000).

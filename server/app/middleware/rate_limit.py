@@ -33,9 +33,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _client_ip(request: Request) -> str:
-        fwd = request.headers.get("x-forwarded-for")
-        if fwd:
-            return fwd.split(",")[0].strip()
+        # X-Forwarded-For is client-controlled; honoring it by default lets an
+        # attacker rotate buckets per request. Only trust it behind a proxy
+        # that overwrites it (TRUST_PROXY_HEADERS=true).
+        if get_settings().TRUST_PROXY_HEADERS:
+            fwd = request.headers.get("x-forwarded-for")
+            if fwd:
+                return fwd.split(",")[0].strip()
         return request.client.host if request.client else "unknown"
 
     def _sweep(self, now: float) -> None:

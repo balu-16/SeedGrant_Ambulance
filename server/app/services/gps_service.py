@@ -123,15 +123,21 @@ async def process_gps(
             cmd, should_publish = await cmds.get_or_create_priority(
                 db, session.id, j.id, approach_dir
             )
-            if session.status in ("ACTIVE", "APPROACHING_JUNCTION", "CROSSING"):
-                session.status = "PRIORITY_REQUESTED"
-            from app.integrations.notify import notify_user
+            # Only claim PRIORITY_REQUESTED when the command is actually live
+            # (new or re-armed) — a stale/HELD/RELEASED command found by
+            # correlation_id must not flip the session status back.
+            if should_publish:
+                if session.status in ("ACTIVE", "APPROACHING_JUNCTION", "CROSSING"):
+                    session.status = "PRIORITY_REQUESTED"
+                from app.integrations.notify import resolve_player_ids, schedule_push
 
-            if should_publish:  # newly created OR re-armed from EXPIRED
                 await publish_command(cmd, jid, approach_dir)
-                await notify_user(
-                    db,
-                    session.driver_id,
+                # resolve subscriptions in-request, then send in the background:
+                # a slow Expo endpoint must never add latency to the 1 Hz GPS fix
+                player_ids = await resolve_player_ids(db, session.driver_id)
+                schedule_push(
+                    player_ids,
+                    str(session.driver_id),
                     "Priority requested",
                     f"Green corridor requested at {j.name} ({approach_dir}).",
                 )

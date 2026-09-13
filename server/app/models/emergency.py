@@ -1,11 +1,14 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.consts import ACTIVE_SESSION_STATUSES
 from app.db.base import Base
+
+_ACTIVE_STATUS_SQL = ", ".join(f"'{s}'" for s in ACTIVE_SESSION_STATUSES)
 
 
 class EmergencySession(Base):
@@ -23,6 +26,24 @@ class EmergencySession(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_gps_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        # at most one ACTIVE-family session per ambulance / per driver; terminal
+        # statuses (COMPLETED/CANCELLED/TIMED_OUT) are exempt
+        Index(
+            "uq_emergency_sessions_ambulance_active",
+            "ambulance_id",
+            unique=True,
+            postgresql_where=text(f"status IN ({_ACTIVE_STATUS_SQL})"),
+            sqlite_where=text(f"status IN ({_ACTIVE_STATUS_SQL})"),
+        ),
+        Index(
+            "uq_emergency_sessions_driver_active",
+            "driver_id",
+            unique=True,
+            postgresql_where=text(f"status IN ({_ACTIVE_STATUS_SQL})"),
+            sqlite_where=text(f"status IN ({_ACTIVE_STATUS_SQL})"),
+        ),
+    )
 
 
 class GpsPoint(Base):

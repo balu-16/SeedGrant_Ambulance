@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -40,3 +40,13 @@ class Ambulance(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     driver: Mapped["User | None"] = relationship("User", back_populates="ambulances")
+    __table_args__ = (
+        # a driver may be assigned to at most one ambulance (NULL rows exempt)
+        Index(
+            "uq_ambulances_driver",
+            "driver_id",
+            unique=True,
+            postgresql_where=text("driver_id IS NOT NULL"),
+            sqlite_where=text("driver_id IS NOT NULL"),
+        ),
+    )

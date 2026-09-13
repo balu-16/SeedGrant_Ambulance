@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.dependencies import get_current_user, get_db
@@ -27,6 +27,9 @@ from app.schemas.common import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# pre-computed hash for the login timing-equalization path
+_DUMMY_HASH = hash_password("InvalidCredentialsTiming1!")
+
 
 @router.post("/register")
 async def register(body: RegisterIn, db=Depends(get_db)):
@@ -35,7 +38,7 @@ async def register(body: RegisterIn, db=Depends(get_db)):
         pw_hash = hash_password(body.password)
     except ValueError as e:
         raise AppError(str(e), code="VALIDATION_ERROR", status_code=422) from None
-    u = User(email=body.email, password_hash=pw_hash, role="DRIVER")
+    u = User(email=body.email.lower(), password_hash=pw_hash, role="DRIVER")
     db.add(u)
     try:
         await db.commit()
@@ -47,13 +50,19 @@ async def register(body: RegisterIn, db=Depends(get_db)):
 
 @router.post("/login")
 async def login(body: LoginIn, db=Depends(get_db)):
-    u = await get_user_by_email(db, body.email)
-    if not u or not u.is_active or not verify_password(body.password, u.password_hash):
+    # emails are stored lowercase — normalize before lookup
+    u = await get_user_by_email(db, body.email.lower())
+    if not u or not u.is_active:
+        # burn a bcrypt round so a missing/inactive user is not distinguishable
+        # from a wrong password by response timing (user enumeration)
+        verify_password(body.password, _DUMMY_HASH)
+        raise Unauthorized("Invalid credentials")
+    if not verify_password(body.password, u.password_hash):
         raise Unauthorized("Invalid credentials")
     return {
         "success": True,
         "data": {
-            "access_token": create_access_token(str(u.id), u.role),
+            "access_token": create_access_token(str(u.id)),
             "refresh_token": create_refresh_token(str(u.id), u.refresh_version),
             "user": {"id": str(u.id), "email": u.email, "role": u.role},
         },
@@ -74,14 +83,24 @@ async def refresh(body: RefreshIn, db=Depends(get_db)):
         raise Unauthorized("User not found or inactive")
     if int(p.get("ver", 0)) != (u.refresh_version or 0):
         raise Unauthorized("Refresh token revoked — please log in again")
-    # rotate: bump refresh_version FIRST so any older refresh token is
-    # invalidated immediately, then mint the fresh pair from the new version
-    u.refresh_version = (u.refresh_version or 0) + 1
+    # rotate: bump refresh_version with a conditional UPDATE so two concurrent
+    # refreshes cannot both succeed and mint two valid refresh chains — the
+    # loser's version no longer matches and is rejected as revoked
+    expected = u.refresh_version or 0
+    res = await db.execute(
+        update(User)
+        .where(User.id == u.id, User.refresh_version == expected)
+        .values(refresh_version=expected + 1)
+    )
+    if res.rowcount != 1:
+        await db.rollback()
+        raise Unauthorized("Refresh token revoked — please log in again")
+    u.refresh_version = expected + 1
     await db.commit()
     return {
         "success": True,
         "data": {
-            "access_token": create_access_token(str(u.id), u.role),
+            "access_token": create_access_token(str(u.id)),
             "refresh_token": create_refresh_token(str(u.id), u.refresh_version),
         },
     }

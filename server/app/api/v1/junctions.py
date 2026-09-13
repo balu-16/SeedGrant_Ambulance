@@ -139,8 +139,10 @@ async def override_junction(
         if body.action == "FORCE_RELEASE":
             cmd = await command_service.create_release(db, cmd.session_id, jid, cmd.approach)
             await publish_command(cmd, str(jid), cmd.approach)
-        else:  # HOLD: expire the open command, nothing is published
-            cmd.status = "EXPIRED"
+        else:  # HOLD: shelve the open command, nothing is published. HELD (not
+            # EXPIRED, which the GPS pipeline re-arms) so the officer's decision
+            # survives subsequent fixes until FORCE_RELEASE/REISSUE.
+            cmd.status = "HELD"
     else:  # REISSUE
         cmd = await _latest_command(db, jid, ("EXPIRED",))
         if not cmd:

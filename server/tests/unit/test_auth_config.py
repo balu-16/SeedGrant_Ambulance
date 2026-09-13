@@ -15,9 +15,10 @@ def test_password_roundtrip():
 
 
 def test_token_roundtrip_and_types():
-    a = create_access_token("user-1", "DRIVER")
+    a = create_access_token("user-1")
     p = decode_token(a)
-    assert p["type"] == "access" and p["role"] == "DRIVER"
+    # role is deliberately NOT a claim — authorization re-derives it from the DB
+    assert p["type"] == "access" and "role" not in p
     r = create_refresh_token("user-1", 3)
     pr = decode_token(r)
     assert pr["type"] == "refresh" and pr["ver"] == 3

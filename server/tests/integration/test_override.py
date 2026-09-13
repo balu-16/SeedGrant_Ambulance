@@ -9,8 +9,15 @@ from sqlalchemy import select
 from app.integrations.mqtt import get_mqtt
 from app.models.device import AuditLog
 from app.models.emergency import EmergencyCommand
+from app.models.junction import Junction
 
-from .conftest import insert_priority_command, login_headers, make_portal_user, make_user
+from .conftest import (
+    gps_near_junction,
+    insert_priority_command,
+    login_headers,
+    make_portal_user,
+    make_user,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -76,7 +83,7 @@ async def test_force_release_issues_release_command_and_publishes(
     assert published[0].payload["correlation_id"] == data["command"]["correlation_id"]
 
 
-async def test_hold_expires_open_command_without_publish(client, admin, db_factory, junction):
+async def test_hold_shelves_open_command_without_publish(client, admin, db_factory, junction):
     cmd = await insert_priority_command(db_factory, uuid.UUID(junction["id"]))
     officer = await _officer_for(
         client, admin, db_factory, "hold.cop@example.com", [junction["id"]]
@@ -85,13 +92,139 @@ async def test_hold_expires_open_command_without_publish(client, admin, db_facto
 
     r = await _override(client, officer["headers"], junction["id"], "HOLD")
     assert r.status_code == 200, r.text
-    assert r.json()["data"]["command"]["status"] == "EXPIRED"
+    assert r.json()["data"]["command"]["status"] == "HELD"
 
     async with db_factory() as s:
         row = await s.get(EmergencyCommand, cmd.id)
-        assert row.status == "EXPIRED"
+        assert row.status == "HELD"
     # HOLD publishes nothing
     assert len(get_mqtt().published) == published_before
+
+
+async def _start_session(client, driver, ambulance) -> str:
+    start = await client.post(
+        "/api/v1/emergencies/start",
+        json={"ambulance_id": ambulance["id"]},
+        headers=await login_headers(client, driver["user"].email),
+    )
+    assert start.status_code == 200, start.text
+    return start.json()["data"]["session_id"]
+
+
+async def _priority_for_session(db_factory, session_id: str) -> EmergencyCommand:
+    async with db_factory() as s:
+        row = (
+            (
+                await s.execute(
+                    select(EmergencyCommand).where(
+                        EmergencyCommand.session_id == uuid.UUID(session_id),
+                        EmergencyCommand.command_type == "PRIORITY_REQUEST",
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        assert row is not None
+        await s.refresh(row)
+        return row
+
+
+async def test_hold_survives_subsequent_gps_fixes(
+    client, admin, db_factory, junction, driver, ambulance
+):
+    """An officer's HOLD must not be undone by the GPS pipeline's auto-rearm."""
+    from app.utils.geo import offset_point
+
+    sid = await _start_session(client, driver, ambulance)
+    fix = await gps_near_junction(db_factory, uuid.UUID(junction["id"]))
+    r1 = await client.post(f"/api/v1/emergencies/{sid}/gps", json=fix, headers=driver["headers"])
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["data"]["status"] == "PRIORITY_REQUESTED"
+    cmd = await _priority_for_session(db_factory, sid)
+    publishes_after_first_fix = len(
+        [m for m in get_mqtt().published if m.payload["type"] == "PRIORITY_REQUEST"]
+    )
+    assert publishes_after_first_fix >= 1
+
+    officer = await _officer_for(
+        client, admin, db_factory, "hold.gps.cop@example.com", [junction["id"]]
+    )
+    r = await _override(client, officer["headers"], junction["id"], "HOLD")
+    assert r.status_code == 200, r.text
+
+    # a later in-geofence fix (moved 100m closer) must NOT re-arm/publish
+    async with db_factory() as s:
+        j = (
+            await s.execute(select(Junction).where(Junction.id == uuid.UUID(junction["id"])))
+        ).scalar_one()
+        lat, lon = offset_point(j.latitude, j.longitude, bearing=0, dist_m=50)
+    fix2 = {**fix, "latitude": lat, "longitude": lon}
+    r2 = await client.post(f"/api/v1/emergencies/{sid}/gps", json=fix2, headers=driver["headers"])
+    assert r2.status_code == 200, r2.text
+
+    publishes_after_hold = len(
+        [m for m in get_mqtt().published if m.payload["type"] == "PRIORITY_REQUEST"]
+    )
+    assert publishes_after_hold == publishes_after_first_fix
+    async with db_factory() as s:
+        row = await s.get(EmergencyCommand, cmd.id)
+        assert row is not None and row.status == "HELD"
+
+
+async def test_rearm_capped_at_max_retries(client, admin, db_factory, junction, driver, ambulance):
+    """A command that has hit MAX_COMMAND_RETRIES stays EXPIRED — no endless republish."""
+    from app.core.config import get_settings
+
+    cap = get_settings().MAX_COMMAND_RETRIES
+    sid = await _start_session(client, driver, ambulance)
+    fix = await gps_near_junction(db_factory, uuid.UUID(junction["id"]))
+    r1 = await client.post(f"/api/v1/emergencies/{sid}/gps", json=fix, headers=driver["headers"])
+    assert r1.status_code == 200, r1.text
+    cmd = await _priority_for_session(db_factory, sid)
+    publishes_after_first_fix = len(
+        [m for m in get_mqtt().published if m.payload["correlation_id"] == cmd.correlation_id]
+    )
+    assert publishes_after_first_fix == 1
+
+    # age the command out and exhaust its re-arm budget
+    async with db_factory() as s:
+        row = await s.get(EmergencyCommand, cmd.id)
+        row.status = "EXPIRED"
+        row.retry_count = cap
+        row.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        await s.commit()
+
+    # move closer so the fix is not a same-coords replay no-op
+    from app.utils.geo import offset_point
+
+    async with db_factory() as s:
+        j = (
+            await s.execute(select(Junction).where(Junction.id == uuid.UUID(junction["id"])))
+        ).scalar_one()
+        lat, lon = offset_point(j.latitude, j.longitude, bearing=0, dist_m=80)
+    r2 = await client.post(
+        f"/api/v1/emergencies/{sid}/gps",
+        json={**fix, "latitude": lat, "longitude": lon},
+        headers=driver["headers"],
+    )
+    assert r2.status_code == 200, r2.text
+
+    async with db_factory() as s:
+        row = await s.get(EmergencyCommand, cmd.id)
+        assert row.status == "EXPIRED"  # not re-armed
+        assert row.retry_count == cap
+    # still exactly the one publish from the first fix — the cap refused re-arm
+    assert (
+        len(
+            [
+                m
+                for m in get_mqtt().published
+                if m.payload["correlation_id"] == cmd.correlation_id
+            ]
+        )
+        == publishes_after_first_fix
+    )
 
 
 async def test_reissue_rearms_expired_command(client, admin, db_factory, junction):

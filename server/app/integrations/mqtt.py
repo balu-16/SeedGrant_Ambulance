@@ -128,7 +128,14 @@ class RealMqttClient(MqttClientBase):
             raise
         self._client = client
         self.connected = True
-        log.info("mqtt_connected", url=get_settings().MQTT_BROKER_URL)
+        # redact userinfo — an operator may embed credentials in the broker URL
+        url = get_settings().MQTT_BROKER_URL
+        if "@" in url:
+            scheme_end = url.find("://")
+            at = url.rfind("@")
+            if scheme_end != -1 and at > scheme_end:
+                url = f"{url[: scheme_end + 3]}***@{url[at + 1 :]}"
+        log.info("mqtt_connected", url=url)
         await self._resubscribe()
         # flush anything queued while offline
         while self._outbox:

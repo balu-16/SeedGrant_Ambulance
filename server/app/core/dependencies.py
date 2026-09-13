@@ -57,7 +57,13 @@ def require_any(*roles: str):
 
 
 def hospital_scope(user) -> uuid.UUID | None:
-    """hospital_id for HOSPITAL-scoped queries (ADMIN/others have none → None)."""
+    """hospital_id for HOSPITAL-scoped queries.
+
+    Contract: for a HOSPITAL user, None means UNASSIGNED — callers must return
+    an empty/forbidden result, never build a filter from it (`col == None`
+    compiles to `col IS NULL`, which would expose every unassigned row).
+    For ADMIN/other roles None means "not hospital-scoped" (see everything).
+    """
     return getattr(user, "hospital_id", None)
 
 
@@ -75,10 +81,6 @@ async def police_junction_ids(db: AsyncSession, user) -> list[uuid.UUID]:
 
 def hash_api_key(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
-
-
-def api_key_matches(raw: str, stored_hash: str) -> bool:
-    return hmac.compare_digest(hash_api_key(raw), stored_hash)
 
 
 async def device_from_key(
