@@ -15,8 +15,8 @@ polling) so the junction's Raspberry Pi controller can clear the way.
 
 Backend architecture note: inference runs on the Raspberry Pi (edge) and is ingested via
 `POST /api/v1/vision/detections`; the backend itself runs no model. (`best.pt` at the repo
-root is left over from a demo — it is gitignored and nothing in the repo uses it; safe to
-delete.)
+root is the trained BMD-45 detector — 13 Indian-traffic vehicle classes, YOLOv12-S-sized —
+for Pi-side inference; it is gitignored and verified to load and detect via `ultralytics`.)
 
 ## Secrets policy (important)
 

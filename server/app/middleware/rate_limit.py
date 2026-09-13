@@ -1,7 +1,6 @@
 """Lightweight in-memory sliding-window rate limiter (per client IP).
 
-Applies to POST /api/v1/auth/* (credential brute force) and
-POST /api/v1/vision/detect (CPU-heavy inference). No external store: set
+Applies to POST /api/v1/auth/* (credential brute force). No external store: set
 RATE_LIMIT_ENABLED=false to disable entirely (tests, local dev).
 Old buckets are swept opportunistically, piggybacked on request handling.
 """
@@ -21,7 +20,6 @@ _SWEEP_EVERY_SECONDS = 60.0
 # (method, path match, exact) — exact=True means full-path equality
 _LIMITED_ROUTES = (
     ("POST", "/api/v1/auth/", False),
-    ("POST", "/api/v1/vision/detect", True),
 )
 
 

@@ -197,6 +197,7 @@ class RealMqttClient(MqttClientBase):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                self.connected = False  # pump died — report disconnected until redial
                 log.warning("mqtt_reconnect_scheduled", error=str(e), retry_in_s=delay)
             finally:
                 # a failed pump leaves a dead client behind; drop it so the
