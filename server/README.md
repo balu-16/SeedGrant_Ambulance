@@ -2,6 +2,11 @@
 
 Central API for ambulance priority. Pis do YOLO/edge decisions locally; backend coordinates.
 
+Data layer: **SQLAlchemy 2.0 async ORM** over `asyncpg` — one `AsyncSession` per request via a
+FastAPI dependency, declarative models in `app/models/` (16 tables, UUID PKs, JSONB payloads),
+schema managed by Alembic (sync `psycopg` URL). The test suite runs on in-memory SQLite, so
+`pytest` needs no live database.
+
 ## Setup — paste keys, zero errors
 
 ```bash
@@ -57,17 +62,24 @@ seed only. Refresh tokens rotate on every refresh; a rotated token is rejected.
 
 ## APIs (`/api/v1`)
 
-- `POST /auth/register|login|refresh|logout`, `GET /auth/me`
+- `POST /auth/register|login|refresh|logout|change-password`, `GET /auth/me`,
+  `GET|PATCH /auth/profile` (driver profile)
 - `POST|GET|DELETE /push/*` (push-token register/list/remove)
-- `POST /ambulances`, `GET /ambulances/mine`, `GET /ambulances/{id}`
-- `POST /junctions`, `GET /junctions`, `GET /junctions/{id}`
+- `POST /ambulances`, `GET /ambulances`, `GET /ambulances/mine`, `GET|PATCH /ambulances/{id}`
+- `POST /junctions`, `GET /junctions`, `GET /junctions/{id}`, `POST /junctions/{id}/override`
+- `GET /hospitals`, `GET /hospitals/{id}` (destination picker — read-only, all roles)
 - `POST /admin/devices/register` (returns api_key once), `POST /admin/devices/{id}/rotate-key`
 - `POST /devices/heartbeat|telemetry` (`X-Device-Api-Key`)
 - `GET /junctions/{id}/state`, `GET /telemetry?junction_id&limit&offset`
 - `POST /emergencies/start`, `POST /emergencies/{id}/gps`, `GET /emergencies/current`,
-  `POST /emergencies/{id}/stop|cancel`, `GET /emergencies/history`
+  `POST /emergencies/{id}/stop|cancel|heartbeat|patient`, `GET /emergencies/{id}/timeline`,
+  `GET /emergencies/history`
 - `GET /commands/pending?junction_id`, `POST /commands/{id}/ack`, `GET /commands/admin/list`
-- `GET /admin/devices/status`, `GET /admin/emergencies`, `POST /admin/sweep`, `GET /admin/config-check`
+- `POST /admin/sweep`, `GET /admin/config-check`, `GET /admin/mqtt/health`,
+  `GET /admin/devices/status`, `GET /admin/emergencies`, `GET /admin/fleet/drivers`,
+  `GET|POST /admin/users`, `PATCH /admin/users/{id}`, `POST /admin/users/{id}/password-reset`,
+  `GET|POST /admin/hospitals`, `PATCH /admin/hospitals/{id}`, `GET /admin/live`,
+  `GET /admin/alerts`, `GET /admin/analytics/overview`, `GET /admin/audit`
 - `POST|GET /vision/detections` (Pi-side inference ingest + portal listing; the server runs no model)
 - `GET /health`, `GET /ready` (503 when DB down)
 

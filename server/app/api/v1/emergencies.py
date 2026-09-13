@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import desc, select
 
 from app.core.dependencies import get_current_user, get_db
@@ -264,27 +265,202 @@ async def cancel(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_us
     return {"success": True, "data": {"status": s.status}}
 
 
-@router.get("/history")
-async def history(
-    limit: int = Query(default=50, ge=1, le=200),
-    db=Depends(get_db),
-    user=Depends(get_current_user),
+@router.post("/{sid}/heartbeat")
+async def heartbeat(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_user)):
+    """Keep-alive without a GPS fix — resets the inactivity timer.
+
+    Used when the driver is stationary (or GPS is weak) so a live session
+    is not TIMED_OUT while the app is still in the foreground/background task.
+    """
+    from datetime import UTC, datetime
+
+    s = await emg.get_session(db, sid, for_update=True)
+    emg.ensure_owner(s, user)
+    from app.core.consts import ACTIVE_SESSION_STATUSES as _ACTIVE
+
+    if s.status not in _ACTIVE:
+        raise Conflict(f"Session {s.status} not accepting heartbeat")
+    s.last_gps_at = datetime.now(UTC)
+    await db.commit()
+    return {"success": True, "data": {"status": s.status}}
+
+
+class PatientIn(BaseModel):
+    notes: str | None = None
+    severity: str | None = None
+
+
+@router.post("/{sid}/patient")
+async def patient(
+    sid: uuid.UUID, body: PatientIn, db=Depends(get_db), user=Depends(get_current_user)
 ):
-    rows = (
+    """Free-text patient handoff stored on the audit trail (no PHI schema yet)."""
+    s = await emg.get_session(db, sid, for_update=True)
+    emg.ensure_owner(s, user)
+    db.add(
+        AuditLog(
+            actor=str(user.id),
+            action="emergency.patient",
+            entity="emergency_sessions",
+            detail={
+                "session_id": str(s.id),
+                "notes": (body.notes or "")[:2000],
+                "severity": body.severity,
+            },
+        )
+    )
+    await db.commit()
+    return {"success": True, "data": {"status": s.status}}
+
+
+@router.get("/{sid}/timeline")
+async def timeline(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_user)):
+    """Event timeline for one session: commands + GPS count + audit entries."""
+    from app.models.emergency import EmergencyCommand
+
+    s = await emg.get_session(db, sid)
+    emg.ensure_owner(s, user)
+    cmds = (
         (
             await db.execute(
-                select(emg.EmergencySession)
-                .where(emg.EmergencySession.driver_id == user.id)
-                .order_by(desc(emg.EmergencySession.started_at))
-                .limit(limit)
+                select(EmergencyCommand)
+                .where(EmergencyCommand.session_id == s.id)
+                .order_by(EmergencyCommand.created_at)
             )
         )
         .scalars()
         .all()
     )
-    return {
-        "success": True,
-        "data": [
+    audits = (
+        (
+            await db.execute(
+                select(AuditLog)
+                .where(AuditLog.entity == "emergency_sessions")
+                .order_by(desc(AuditLog.id))
+                .limit(200)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    items = [
+        {
+            "id": str(c.id),
+            "kind": "command",
+            "type": c.command_type,
+            "status": c.status,
+            "junction_id": str(c.junction_id),
+            "approach": c.approach,
+            "at": c.created_at.isoformat() if c.created_at else None,
+        }
+        for c in cmds
+    ]
+    for a in audits:
+        try:
+            detail = a.detail or {}
+        except Exception:
+            detail = {}
+        if isinstance(detail, dict) and detail.get("session_id") == str(s.id):
+            items.append(
+                {
+                    "id": str(a.id),
+                    "kind": "audit",
+                    "type": a.action,
+                    "status": None,
+                    "at": None,
+                }
+            )
+    return {"success": True, "data": {"session_id": str(s.id), "items": items}}
+
+
+@router.get("/history")
+async def history(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    status: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    from_: str | None = Query(default=None, alias="from"),
+    to: str | None = Query(default=None),
+    db=Depends(get_db),
+    user=Depends(get_current_user),
+):
+    from app.models.emergency import EmergencyCommand
+    from app.utils.geo import haversine_m
+
+    stmt = select(emg.EmergencySession).where(emg.EmergencySession.driver_id == user.id)
+    if status:
+        stmt = stmt.where(emg.EmergencySession.status == status.upper())
+    if q:
+        stmt = stmt.where(emg.EmergencySession.hospital.ilike(f"%{q}%"))
+    if from_:
+        try:
+            from datetime import UTC as _UTC
+            from datetime import datetime as _dt
+
+            _f = _dt.fromisoformat(from_)
+            if _f.tzinfo is None:
+                _f = _f.replace(tzinfo=_UTC)
+            stmt = stmt.where(emg.EmergencySession.started_at >= _f)
+        except Exception:
+            pass
+    if to:
+        try:
+            from datetime import UTC as _UTC2
+            from datetime import datetime as _dt2
+
+            _t = _dt2.fromisoformat(to)
+            if _t.tzinfo is None:
+                _t = _t.replace(tzinfo=_UTC2)
+            stmt = stmt.where(emg.EmergencySession.started_at <= _t)
+        except Exception:
+            pass
+    rows = (
+        (
+            await db.execute(
+                stmt.order_by(desc(emg.EmergencySession.started_at))
+                .limit(limit)
+                .offset(offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    data = []
+    for r in rows:
+        pts = (
+            (
+                await db.execute(
+                    select(GpsPoint)
+                    .where(GpsPoint.session_id == r.id)
+                    .order_by(GpsPoint.recorded_at)
+                    .limit(2000)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        distance_m = 0.0
+        for a, b in zip(pts, pts[1:]):
+            try:
+                distance_m += haversine_m(a.latitude, a.longitude, b.latitude, b.longitude)
+            except Exception:
+                pass
+        junctions_crossed = (
+            (
+                await db.execute(
+                    select(EmergencyCommand.junction_id)
+                    .where(
+                        EmergencyCommand.session_id == r.id,
+                        EmergencyCommand.command_type == "PRIORITY_REQUEST",
+                    )
+                    .distinct()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        last = pts[-1] if pts else None
+        data.append(
             {
                 "id": str(r.id),
                 "status": r.status,
@@ -292,7 +468,10 @@ async def history(
                 "ended_reason": r.ended_reason,
                 "started_at": r.started_at.isoformat(),
                 "ended_at": r.ended_at.isoformat() if r.ended_at else None,
+                "distance_m": round(distance_m, 1),
+                "junctions_crossed": len(junctions_crossed),
+                "last_latitude": last.latitude if last else None,
+                "last_longitude": last.longitude if last else None,
             }
-            for r in rows
-        ],
-    }
+        )
+    return {"success": True, "data": data}

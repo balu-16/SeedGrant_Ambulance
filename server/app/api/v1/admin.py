@@ -106,12 +106,43 @@ async def config_check(_=Depends(require_role("ADMIN"))):
         "success": True,
         "data": {
             "mqtt_provider": s.MQTT_PROVIDER,
+            "mqtt_broker_host": s.MQTT_BROKER_URL.split("://")[-1].split(":")[0][:24] + "...",
+            "mqtt_tls": s.MQTT_BROKER_URL.startswith("mqtts://"),
             "supabase_configured": bool(
                 s.SUPABASE_URL
                 and s.SUPABASE_ANON_KEY
                 and not s.SUPABASE_ANON_KEY.startswith("PASTE_")
             ),
             "environment": s.ENVIRONMENT,
+            "data_retention_days": s.DATA_RETENTION_DAYS,
+            "sweep_min_interval_seconds": s.SWEEP_MIN_INTERVAL_SECONDS,
+        },
+    }
+
+
+@router.get("/mqtt/health")
+async def mqtt_health(_=Depends(require_role("ADMIN"))):
+    """MQTT broker health for the System page (no secrets)."""
+    from app.core.config import get_settings
+    from app.integrations.mqtt import get_mqtt
+
+    s = get_settings()
+    mqtt = get_mqtt()
+    try:
+        connected = bool(getattr(mqtt, "connected", False))
+    except Exception:
+        connected = False
+    try:
+        outbox = len(getattr(mqtt, "_outbox", []) or [])
+    except Exception:
+        outbox = 0
+    return {
+        "success": True,
+        "data": {
+            "provider": s.MQTT_PROVIDER,
+            "tls": s.MQTT_BROKER_URL.startswith("mqtts://"),
+            "connected": connected,
+            "outbox": outbox,
         },
     }
 
@@ -168,12 +199,17 @@ async def all_emergencies(
     if user.role == "HOSPITAL":
         scope = hospital_scope(user)
         if scope is None:  # unassigned HOSPITAL user: see nothing
-            return {"success": True, "data": {"items": [], "limit": limit, "offset": offset}}
+            return {"success": True, "data": {"items": [], "limit": limit, "offset": offset, "total": 0}}
         q = q.where(
             EmergencySession.ambulance_id.in_(
                 select(Ambulance.id).where(Ambulance.hospital_id == scope)
             )
         )
+    from sqlalchemy import func as _func
+
+    total = (
+        await db.execute(select(_func.count()).select_from(q.subquery()))
+    ).scalar_one()
     rows = (await db.execute(q.limit(limit).offset(offset))).scalars().all()
     driver_ids = {r.driver_id for r in rows if r.driver_id}
     ambulance_ids = {r.ambulance_id for r in rows if r.ambulance_id}
@@ -206,6 +242,7 @@ async def all_emergencies(
             ],
             "limit": limit,
             "offset": offset,
+            "total": total,
         },
     }
 
@@ -800,6 +837,33 @@ async def analytics_overview(
         cmd_q = cmd_q.where(EmergencyCommand.junction_id.in_(pids))
     cmds = (await db.execute(cmd_q)).scalars().all()
     cmd_by_status = Counter(c.status for c in cmds)
+    # Crossing times: PRIORITY_REQUEST created → ack (min). p50/p95 + outcomes.
+    crossing_min = sorted(
+        (c.ack_at - c.created_at).total_seconds() / 60.0
+        for c in cmds
+        if c.command_type == "PRIORITY_REQUEST"
+        and c.created_at
+        and c.ack_at
+        and (c.ack_at - c.created_at).total_seconds() >= 0
+    )
+    def _pct(vals: list[float], p: float) -> float | None:
+        if not vals:
+            return None
+        idx = min(len(vals) - 1, max(0, int(round(p * (len(vals) - 1)))))
+        return round(vals[idx], 1)
+
+    crossing = {
+        "p50_minutes": _pct(crossing_min, 0.5),
+        "p95_minutes": _pct(crossing_min, 0.95),
+        "samples": len(crossing_min),
+    }
+    # Peak hours: emergencies per hour-of-day (UTC) across the window.
+    hourly = [0] * 24
+    for s in srows:
+        try:
+            hourly[s.started_at.hour] += 1
+        except Exception:
+            pass
 
     jq = (
         select(
@@ -847,6 +911,8 @@ async def analytics_overview(
                 ),
             },
             "commands": {"total": len(cmds), "by_status": dict(cmd_by_status)},
+            "crossing": crossing,
+            "hourly_histogram": hourly,
             "junctions": junction_counts,
             "devices": devices,
         },
