@@ -3,17 +3,18 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 
 from app.core.dependencies import get_current_user, get_db
 from app.core.exceptions import AppError, Conflict, Forbidden, NotFound
 from app.models.device import AuditLog
-from app.models.emergency import GpsPoint
+from app.models.emergency import EmergencyCommand, GpsPoint
 from app.repositories.user_repo import get_ambulance
 from app.schemas.common import GpsIn, StartEmergencyIn
 from app.services import emergency_service as emg
 from app.services.gps_service import process_gps
 from app.services.sweep_service import sweep_timeouts
+from app.utils.geo import haversine_m
 
 router = APIRouter(prefix="/emergencies", tags=["emergencies"])
 
@@ -70,6 +71,7 @@ async def start(body: StartEmergencyIn, db=Depends(get_db), user=Depends(get_cur
         amb.driver_id or user.id,
         "Emergency active",
         f"Ambulance {amb.vehicle_no} emergency started.",
+        event_key="session_started",
     )
     return {"success": True, "data": {"session_id": str(s.id), "status": s.status}}
 
@@ -96,7 +98,9 @@ async def gps(sid: uuid.UUID, body: GpsIn, db=Depends(get_db), user=Depends(get_
                         _pids,
                         str(s.driver_id),
                         "Emergency timed out",
-                        "Your emergency session expired from inactivity. Start a new one when ready.",
+                        "Your emergency session expired from inactivity."
+                        " Start a new one when ready.",
+                        event_key="session_ended",
                     )
             except Exception:
                 pass
@@ -146,7 +150,6 @@ async def gps(sid: uuid.UUID, body: GpsIn, db=Depends(get_db), user=Depends(get_
     from sqlalchemy import select as _select
 
     from app.models.junction import Junction
-    from app.utils.geo import haversine_m
 
     prev_map = {}
     if last:
@@ -212,6 +215,7 @@ async def current(db=Depends(get_db), user=Depends(get_current_user)):
                     str(s.driver_id),
                     "Emergency timed out",
                     "Your emergency session expired from inactivity. Start a new one when ready.",
+                    event_key="session_ended",
                 )
         except Exception:
             pass
@@ -241,7 +245,13 @@ async def stop(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_user
     await db.commit()
     from app.integrations.notify import notify_user
 
-    await notify_user(db, s.driver_id, "Emergency ended", f"Session {s.id} {s.status.lower()}.")
+    await notify_user(
+        db,
+        s.driver_id,
+        "Emergency ended",
+        f"Session {s.id} {s.status.lower()}.",
+        event_key="session_ended",
+    )
     return {"success": True, "data": {"status": s.status}}
 
 
@@ -316,7 +326,6 @@ async def patient(
 @router.get("/{sid}/timeline")
 async def timeline(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_user)):
     """Event timeline for one session: commands + GPS count + audit entries."""
-    from app.models.emergency import EmergencyCommand
 
     s = await emg.get_session(db, sid)
     emg.ensure_owner(s, user)
@@ -384,8 +393,6 @@ async def history(
     db=Depends(get_db),
     user=Depends(get_current_user),
 ):
-    from app.models.emergency import EmergencyCommand
-    from app.utils.geo import haversine_m
 
     stmt = select(emg.EmergencySession).where(emg.EmergencySession.driver_id == user.id)
     if status:
@@ -426,41 +433,145 @@ async def history(
         .all()
     )
     data = []
+    if rows:
+        data = await _history_rows(db, [r.id for r in rows], rows)
+    return {"success": True, "data": data}
+
+
+async def _history_rows(db, session_ids: list, rows) -> list[dict]:
+    """Build history rows with 3 grouped queries instead of 2 per session."""
+    from app.utils.geo import haversine_m
+
+    # 1) commands for every session on the page, ordered — feeds both the
+    #    event timelines and the distinct PRIORITY_REQUEST junction counts
+    cmds = (
+        (
+            await db.execute(
+                select(EmergencyCommand)
+                .where(EmergencyCommand.session_id.in_(session_ids))
+                .order_by(EmergencyCommand.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    cmds_by_session: dict = {}
+    for c in cmds:
+        cmds_by_session.setdefault(c.session_id, []).append(c)
+
+    # 2) last fix per session (windowed row_number — no per-session query)
+    rn = (
+        func.row_number()
+        .over(partition_by=GpsPoint.session_id, order_by=GpsPoint.recorded_at.desc())
+        .label("rn")
+    )
+    last_sq = (
+        select(
+            GpsPoint.session_id.label("sid"),
+            GpsPoint.latitude.label("lat"),
+            GpsPoint.longitude.label("lon"),
+            rn,
+        )
+        .where(GpsPoint.session_id.in_(session_ids))
+        .subquery()
+    )
+    last_fix = {
+        sid: (lat, lon)
+        for sid, lat, lon in (
+            await db.execute(
+                select(last_sq.c.sid, last_sq.c.lat, last_sq.c.lon).where(last_sq.c.rn == 1)
+            )
+        ).all()
+    }
+
+    # 3) route distance per session: pair consecutive points via LAG and sum
+    # haversine in Python (SQLite test DB lacks SQL math functions); rows are
+    # bounded by the newest 2000 fixes per session
+    rn_asc = (
+        func.row_number()
+        .over(partition_by=GpsPoint.session_id, order_by=GpsPoint.recorded_at.desc())
+        .label("rn")
+    )
+    capped = (
+        select(
+            GpsPoint.session_id.label("sid"),
+            GpsPoint.latitude.label("lat"),
+            GpsPoint.longitude.label("lon"),
+            GpsPoint.recorded_at.label("rec"),
+            rn_asc,
+        )
+        .where(GpsPoint.session_id.in_(session_ids))
+        .subquery()
+    )
+    lag_lat = func.lag(capped.c.lat).over(partition_by=capped.c.sid, order_by=capped.c.rec)
+    lag_lon = func.lag(capped.c.lon).over(partition_by=capped.c.sid, order_by=capped.c.rec)
+    pair_sq = select(
+        capped.c.sid,
+        capped.c.lat,
+        capped.c.lon,
+        lag_lat.label("plat"),
+        lag_lon.label("plon"),
+    ).subquery()
+    distance_m: dict = {}
+    for sid, lat, lon, plat, plon in (
+        await db.execute(
+            select(
+                pair_sq.c.sid,
+                pair_sq.c.lat,
+                pair_sq.c.lon,
+                pair_sq.c.plat,
+                pair_sq.c.plon,
+            ).where(pair_sq.c.plat.isnot(None), pair_sq.c.plon.isnot(None))
+        )
+    ).all():
+        try:
+            distance_m[sid] = distance_m.get(sid, 0.0) + haversine_m(plat, plon, lat, lon)
+        except Exception:
+            pass
+
+    out: list[dict] = []
     for r in rows:
-        pts = (
-            (
-                await db.execute(
-                    select(GpsPoint)
-                    .where(GpsPoint.session_id == r.id)
-                    .order_by(GpsPoint.recorded_at)
-                    .limit(2000)
-                )
-            )
-            .scalars()
-            .all()
+        session_cmds = cmds_by_session.get(r.id, [])
+        junctions_crossed = {
+            c.junction_id for c in session_cmds if c.command_type == "PRIORITY_REQUEST"
+        }
+        last = last_fix.get(r.id)
+        events = [
+            {
+                "id": f"{r.id}-start",
+                "kind": "session",
+                "type": "started",
+                "status": None,
+                "junction_id": None,
+                "approach": None,
+                "at": r.started_at.isoformat(),
+            }
+        ]
+        events.extend(
+            {
+                "id": str(c.id),
+                "kind": "command",
+                "type": c.command_type,
+                "status": c.status,
+                "junction_id": str(c.junction_id),
+                "approach": c.approach,
+                "at": c.created_at.isoformat() if c.created_at else None,
+            }
+            for c in session_cmds
         )
-        distance_m = 0.0
-        for a, b in zip(pts, pts[1:]):
-            try:
-                distance_m += haversine_m(a.latitude, a.longitude, b.latitude, b.longitude)
-            except Exception:
-                pass
-        junctions_crossed = (
-            (
-                await db.execute(
-                    select(EmergencyCommand.junction_id)
-                    .where(
-                        EmergencyCommand.session_id == r.id,
-                        EmergencyCommand.command_type == "PRIORITY_REQUEST",
-                    )
-                    .distinct()
-                )
+        if r.ended_at:
+            events.append(
+                {
+                    "id": f"{r.id}-end",
+                    "kind": "session",
+                    "type": r.ended_reason or r.status.lower(),
+                    "status": r.status,
+                    "junction_id": None,
+                    "approach": None,
+                    "at": r.ended_at.isoformat(),
+                }
             )
-            .scalars()
-            .all()
-        )
-        last = pts[-1] if pts else None
-        data.append(
+        out.append(
             {
                 "id": str(r.id),
                 "status": r.status,
@@ -468,10 +579,11 @@ async def history(
                 "ended_reason": r.ended_reason,
                 "started_at": r.started_at.isoformat(),
                 "ended_at": r.ended_at.isoformat() if r.ended_at else None,
-                "distance_m": round(distance_m, 1),
+                "distance_m": round(distance_m.get(r.id, 0.0), 1),
                 "junctions_crossed": len(junctions_crossed),
-                "last_latitude": last.latitude if last else None,
-                "last_longitude": last.longitude if last else None,
+                "events": events,
+                "last_latitude": last[0] if last else None,
+                "last_longitude": last[1] if last else None,
             }
         )
-    return {"success": True, "data": data}
+    return out

@@ -90,6 +90,22 @@ class HospitalPatchIn(BaseModel):
     phone: str | None = Field(default=None, max_length=32)
 
 
+class NotificationPrefsIn(BaseModel):
+    """PUT /admin/notification-prefs — event_key -> enabled (known keys only)."""
+
+    prefs: dict[str, bool]
+
+
+class JunctionPatchIn(BaseModel):
+    """PATCH /junctions/{jid} — partial junction update (ADMIN only)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    radius_m: int | None = Field(default=None, ge=10, le=500)
+    is_active: bool | None = None
+
+
 class OverrideIn(BaseModel):
     action: str = Field(pattern="^(FORCE_RELEASE|HOLD|REISSUE)$")
     reason: str = Field(min_length=5, max_length=512)
@@ -157,3 +173,14 @@ class HeartbeatIn(BaseModel):
     @classmethod
     def _payload_size(cls, v: dict) -> dict:
         return _check_payload(v)
+
+
+class ContactIn(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    phone: str = Field(min_length=1, max_length=32)
+
+
+class ContactsPutIn(BaseModel):
+    """PUT /contacts — full-list replace; the API caps emergency contacts at 5."""
+
+    contacts: list[ContactIn] = Field(max_length=5)

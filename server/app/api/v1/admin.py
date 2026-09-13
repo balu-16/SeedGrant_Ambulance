@@ -19,7 +19,7 @@ from app.core.dependencies import (
 )
 from app.core.exceptions import AppError, Conflict, NotFound
 from app.core.security import hash_password
-from app.models.device import AuditLog, Device
+from app.models.device import AuditLog, Device, Telemetry, UserNotificationPref
 from app.models.emergency import EmergencyCommand, EmergencySession, GpsPoint
 from app.models.hospital import Hospital
 from app.models.junction import Junction, PoliceAssignment
@@ -30,6 +30,7 @@ from app.schemas.common import (
     AdminUserPatchIn,
     HospitalIn,
     HospitalPatchIn,
+    NotificationPrefsIn,
 )
 from app.services.sweep_service import sweep_timeouts
 
@@ -45,6 +46,7 @@ def _user_out(u: User, junction_ids: list[str] | None = None) -> dict:
         "hospital_id": str(u.hospital_id) if u.hospital_id else None,
         "junction_ids": junction_ids or [],
         "created_at": u.created_at.isoformat() if u.created_at else None,
+        "last_login": u.last_login_at.isoformat() if u.last_login_at else None,
     }
 
 
@@ -199,7 +201,10 @@ async def all_emergencies(
     if user.role == "HOSPITAL":
         scope = hospital_scope(user)
         if scope is None:  # unassigned HOSPITAL user: see nothing
-            return {"success": True, "data": {"items": [], "limit": limit, "offset": offset, "total": 0}}
+            return {
+                "success": True,
+                "data": {"items": [], "limit": limit, "offset": offset, "total": 0},
+            }
         q = q.where(
             EmergencySession.ambulance_id.in_(
                 select(Ambulance.id).where(Ambulance.hospital_id == scope)
@@ -583,7 +588,7 @@ async def live(db=Depends(get_db), user=Depends(require_any("ADMIN", "HOSPITAL",
     if user.role == "HOSPITAL":
         scope = hospital_scope(user)
         if scope is None:  # unassigned HOSPITAL user: see nothing
-            return {"success": True, "data": {"items": []}}
+            return {"success": True, "data": {"items": [], "junction_states": {}}}
         q = q.where(Ambulance.hospital_id == scope)
     elif user.role == "POLICE":
         q = q.where(
@@ -666,7 +671,49 @@ async def live(db=Depends(get_db), user=Depends(require_any("ADMIN", "HOSPITAL",
                 ],
             }
         )
-    return {"success": True, "data": {"items": items}}
+    # Per-junction live state for map-marker coloring: device health plus the
+    # latest telemetry payload (single windowed query, no N+1).
+    jq = select(Junction.id, Junction.name)
+    if user.role == "POLICE":
+        if not pids:
+            return {"success": True, "data": {"items": items, "junction_states": {}}}
+        jq = jq.where(Junction.id.in_(pids))
+    latest_tel_sq = (
+        select(
+            Telemetry.junction_id.label("jid"),
+            Telemetry.payload.label("payload"),
+            Telemetry.created_at.label("at"),
+            func.row_number()
+            .over(partition_by=Telemetry.junction_id, order_by=desc(Telemetry.created_at))
+            .label("rn"),
+        ).subquery()
+    )
+    latest_tel = {
+        jid: {"payload": payload or {}, "at": at.isoformat() if at else None}
+        for jid, payload, at in (
+            await db.execute(
+                select(latest_tel_sq.c.jid, latest_tel_sq.c.payload, latest_tel_sq.c.at).where(
+                    latest_tel_sq.c.rn == 1
+                )
+            )
+        ).all()
+    }
+    devices = {
+        d.junction_id: d for d in (await db.execute(select(Device))).scalars().all()
+    }
+    junction_states: dict = {}
+    for jid, jname in (await db.execute(jq)).all():
+        d = devices.get(jid)
+        tel = latest_tel.get(jid, {})
+        junction_states[str(jid)] = {
+            "name": jname,
+            "online": bool(d.is_online) if d else False,
+            "last_seen_at": d.last_seen_at.isoformat() if d and d.last_seen_at else None,
+            "state": (tel.get("payload") or {}).get("state"),
+            "telemetry": tel.get("payload"),
+            "telemetry_at": tel.get("at"),
+        }
+    return {"success": True, "data": {"items": items, "junction_states": junction_states}}
 
 
 @router.get("/alerts")
@@ -954,3 +1001,70 @@ async def audit_entries(
             "offset": offset,
         },
     }
+
+
+@router.get("/notification-prefs")
+async def get_notification_prefs(
+    db=Depends(get_db),
+    user=Depends(require_any("ADMIN", "HOSPITAL", "POLICE", "DRIVER")),
+):
+    """Per-user mute switches for notification event keys (absent row = enabled)."""
+    from app.core.consts import NOTIFICATION_EVENT_KEYS
+
+    rows = (
+        (
+            await db.execute(
+                select(UserNotificationPref).where(UserNotificationPref.user_id == user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    muted = {r.event_key for r in rows if not r.enabled}
+    return {
+        "success": True,
+        "data": {key: key not in muted for key in NOTIFICATION_EVENT_KEYS},
+    }
+
+
+@router.put("/notification-prefs")
+async def put_notification_prefs(
+    body: NotificationPrefsIn,
+    db=Depends(get_db),
+    user=Depends(require_any("ADMIN", "HOSPITAL", "POLICE", "DRIVER")),
+):
+    """Replace this user's mute switches (unknown keys rejected, known keys upserted)."""
+    from app.core.consts import NOTIFICATION_EVENT_KEYS
+
+    unknown = [k for k in body.prefs if k not in NOTIFICATION_EVENT_KEYS]
+    if unknown:
+        raise AppError(
+            f"Unknown event keys: {', '.join(sorted(unknown))}",
+            code="VALIDATION_ERROR",
+            status_code=422,
+        )
+    rows = (
+        (
+            await db.execute(
+                select(UserNotificationPref).where(UserNotificationPref.user_id == user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_key = {r.event_key: r for r in rows}
+    for key, enabled in body.prefs.items():
+        row = by_key.get(key)
+        if row is not None:
+            row.enabled = enabled
+        else:
+            db.add(UserNotificationPref(user_id=user.id, event_key=key, enabled=enabled))
+    _audit(
+        db,
+        str(user.id),
+        "notification_prefs.update",
+        "user_notification_prefs",
+        {"prefs": body.prefs},
+    )
+    await db.commit()
+    return {"success": True, "data": body.prefs}

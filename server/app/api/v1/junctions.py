@@ -11,7 +11,7 @@ from app.core.dependencies import get_db, police_junction_ids, require_any, requ
 from app.core.exceptions import Conflict, Forbidden, NotFound
 from app.models.emergency import EmergencyCommand
 from app.models.junction import Approach, Junction
-from app.schemas.common import JunctionIn, OverrideIn
+from app.schemas.common import JunctionIn, JunctionPatchIn, OverrideIn
 from app.services import command_service
 from app.services.gps_service import publish_command
 
@@ -92,6 +92,67 @@ async def get_junction(
             ],
         },
     }
+
+
+@router.patch("/{jid}")
+async def update_junction(
+    jid: uuid.UUID,
+    body: JunctionPatchIn,
+    db=Depends(get_db),
+    user=Depends(require_role("ADMIN")),
+):
+    """Partial junction update — rename, relocate, resize, (de)activate.
+
+    Deactivation immediately releases any open priority commands for the
+    junction so drivers are never left with a green toward a dead controller.
+    """
+    j = (
+        await db.execute(select(Junction).where(Junction.id == jid))
+    ).scalar_one_or_none()
+    if not j:
+        raise NotFound("Junction not found")
+    changes: dict = {}
+    if body.name is not None and body.name != j.name:
+        changes["name"] = {"from": j.name, "to": body.name}
+        j.name = body.name
+    if body.latitude is not None and body.latitude != j.latitude:
+        changes["latitude"] = {"from": j.latitude, "to": body.latitude}
+        j.latitude = body.latitude
+    if body.longitude is not None and body.longitude != j.longitude:
+        changes["longitude"] = {"from": j.longitude, "to": body.longitude}
+        j.longitude = body.longitude
+    if body.radius_m is not None and body.radius_m != j.radius_m:
+        changes["radius_m"] = {"from": j.radius_m, "to": body.radius_m}
+        j.radius_m = body.radius_m
+    if body.is_active is not None and body.is_active != j.is_active:
+        changes["is_active"] = {"from": j.is_active, "to": body.is_active}
+        j.is_active = body.is_active
+        if not body.is_active:
+            open_cmds = (
+                (
+                    await db.execute(
+                        select(EmergencyCommand).where(
+                            EmergencyCommand.junction_id == j.id,
+                            EmergencyCommand.status.in_(OPEN_COMMAND_STATUSES),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for c in open_cmds:
+                c.status = "EXPIRED"
+            if open_cmds:
+                changes["released_commands"] = len(open_cmds)
+    _audit(
+        db,
+        str(user.id),
+        "junction.update",
+        "junctions",
+        {"junction_id": str(j.id), "changes": changes},
+    )
+    await db.commit()
+    return {"success": True, "data": {"id": str(j.id), "is_active": j.is_active}}
 
 
 async def _latest_command(db, jid: uuid.UUID, statuses: tuple[str, ...]):
@@ -191,7 +252,7 @@ async def override_junction(
                 f"Officer re-requested green for you at {j.name} ({cmd.approach} approach).",
             ),
         }[body.action]
-        await notify_user(db, _sess.driver_id, _copy[0], _copy[1])
+        await notify_user(db, _sess.driver_id, _copy[0], _copy[1], event_key="officer_override")
     return {
         "success": True,
         "data": {

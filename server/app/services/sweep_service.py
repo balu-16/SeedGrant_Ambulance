@@ -113,6 +113,7 @@ async def sweep_timeouts(db, force: bool = False) -> dict:
                     str(driver_id),
                     "Emergency timed out",
                     "Your emergency session expired from inactivity. Start a new one when ready.",
+                    event_key="session_ended",
                 )
         except Exception:
             log.warning("timeout_push_skipped", driver_id=str(driver_id))

@@ -14,15 +14,15 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.consts import PROJECT_VEHICLE_CLASSES
+from app.core.consts import OPEN_COMMAND_STATUSES, PROJECT_VEHICLE_CLASSES
 from app.core.dependencies import (
-    get_current_user,
     get_db,
     police_junction_ids,
     require_any,
+    user_or_device,
 )
 from app.core.exceptions import AppError, Forbidden, NotFound
-from app.models.emergency import EmergencySession
+from app.models.emergency import EmergencyCommand, EmergencySession
 from app.models.junction import Junction
 from app.models.profile import Detection
 from app.schemas.common import DetectionIn
@@ -46,14 +46,24 @@ def _detection_out(d: Detection) -> dict:
 
 @router.post("/detections")
 async def ingest_detections(
-    body: list[DetectionIn], db=Depends(get_db), user=Depends(get_current_user)
+    body: list[DetectionIn], db=Depends(get_db), principal=Depends(user_or_device)
 ):
-    """Store Pi / edge detection records (max 200 per call)."""
+    """Store Pi / edge detection records (max 200 per call).
+
+    Accepts EITHER a junction device API key (X-Device-Api-Key header — the
+    documented Pi ingest path) OR a user bearer token. A device may only tag
+    sessions that have an open command for its own junction.
+    """
     if len(body) > 200:
         raise AppError("max 200 detections per call", code="BAD_REQUEST", status_code=413)
+    device_jid = getattr(principal, "junction_id", None)  # Device principal
+    is_device = getattr(principal, "api_key_hash", None) is not None
     # validate junction_ids in a single query so bogus ids are skipped instead
     # of blowing up the whole batch on the FK constraint
     jids = {item.junction_id for item in body if item.junction_id}
+    if is_device and device_jid is not None:
+        # a Pi may only report for the junction it is bound to
+        jids = {j for j in jids if j == device_jid}
     existing_jids: set = set()
     if jids:
         existing_jids = set(
@@ -87,7 +97,22 @@ async def ingest_detections(
             s = sessions.get(item.session_id)
             if s is None:
                 raise NotFound("Emergency session not found")
-            ensure_owner(s, user)
+            if is_device:
+                if device_jid is None:
+                    raise Forbidden("Device is not bound to a junction")
+                linked = (
+                    await db.execute(
+                        select(EmergencyCommand.id).where(
+                            EmergencyCommand.session_id == s.id,
+                            EmergencyCommand.junction_id == device_jid,
+                            EmergencyCommand.status.in_(OPEN_COMMAND_STATUSES),
+                        )
+                    )
+                ).first()
+                if linked is None:
+                    raise Forbidden("Session has no open command for this junction")
+            else:
+                ensure_owner(s, principal)
             session_id = s.id
         if item.junction_id and item.junction_id not in existing_jids:
             skipped += 1

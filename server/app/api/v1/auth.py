@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.dependencies import get_current_user, get_db
@@ -59,6 +59,8 @@ async def login(body: LoginIn, db=Depends(get_db)):
         raise Unauthorized("Invalid credentials")
     if not verify_password(body.password, u.password_hash):
         raise Unauthorized("Invalid credentials")
+    u.last_login_at = func.now()
+    await db.commit()
     return {
         "success": True,
         "data": {

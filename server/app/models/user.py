@@ -24,6 +24,7 @@ class User(Base):
         UUID(as_uuid=True), ForeignKey("hospitals.id"), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ambulances: Mapped[list["Ambulance"]] = relationship("Ambulance", back_populates="driver")
 
 

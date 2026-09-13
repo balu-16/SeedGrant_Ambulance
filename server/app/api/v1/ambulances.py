@@ -106,12 +106,28 @@ async def my_ambulance(db=Depends(get_db), user=Depends(get_current_user)):
     ).scalars().first()
     if not row:
         raise NotFound("No ambulance assigned to this driver")
+    hospital = None
+    if row.hospital_id:
+        h = (
+            await db.execute(select(Hospital).where(Hospital.id == row.hospital_id))
+        ).scalar_one_or_none()
+        if h:
+            hospital = {
+                "id": str(h.id),
+                "name": h.name,
+                "address": h.address,
+                "latitude": h.latitude,
+                "longitude": h.longitude,
+                "phone": h.phone,
+            }
     return {
         "success": True,
         "data": {
             "id": str(row.id),
             "vehicle_no": row.vehicle_no,
             "driver_id": str(row.driver_id) if row.driver_id else None,
+            "on_duty": row.is_active,
+            "hospital": hospital,
         },
     }
 

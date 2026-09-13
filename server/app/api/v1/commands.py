@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
 from app.api.v1.devices import _audit
@@ -107,6 +107,7 @@ async def ack(cid: uuid.UUID, db=Depends(get_db), dev=Depends(device_from_key)):
             sess.driver_id,
             "Green confirmed",
             f"Junction acknowledged your priority request ({c.approach} approach).",
+            event_key="priority_granted",
         )
     return {"success": True, "data": {"acked": True}}
 
@@ -115,6 +116,8 @@ async def ack(cid: uuid.UUID, db=Depends(get_db), dev=Depends(device_from_key)):
 async def admin_list(
     junction_id: uuid.UUID | None = None,
     status: str | None = None,
+    since: str | None = Query(default=None, description="ISO datetime lower bound on created_at"),
+    until: str | None = Query(default=None, description="ISO datetime upper bound on created_at"),
     limit: int = 100,
     offset: int = 0,
     db=Depends(get_db),
@@ -130,6 +133,23 @@ async def admin_list(
         q = q.where(EmergencyCommand.junction_id == junction_id)
     if status is not None:
         q = q.where(EmergencyCommand.status == status)
+    from datetime import datetime as _dt
+
+    for raw, bound in ((since, "lo"), (until, "hi")):
+        if not raw:
+            continue
+        try:
+            ts = _dt.fromisoformat(raw)
+        except ValueError:
+            from app.core.exceptions import AppError
+
+            raise AppError(
+                f"invalid datetime: {raw}", code="VALIDATION_ERROR", status_code=422
+            ) from None
+        if bound == "lo":
+            q = q.where(EmergencyCommand.created_at >= ts)
+        else:
+            q = q.where(EmergencyCommand.created_at <= ts)
     rows = (
         (await db.execute(q.limit(limit).offset(offset))).scalars().all()
     )

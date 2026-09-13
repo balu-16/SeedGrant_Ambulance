@@ -77,3 +77,20 @@ class PushSubscription(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
+
+
+class UserNotificationPref(Base):
+    """Per-user mute switch per notification event key. An absent row means
+    the event is enabled; keys come from notify.NOTIFICATION_EVENT_KEYS."""
+
+    __tablename__ = "user_notification_prefs"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    event_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
