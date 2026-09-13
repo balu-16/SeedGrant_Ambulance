@@ -78,7 +78,11 @@ export function MapView({
     >
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        url={
+          (import.meta as unknown as { env?: Record<string, string> }).env
+            ?.VITE_TILES_URL ??
+          "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        }
       />
       <Recenter lat={center[0]} lng={center[1]} />
       {dots.map((dot) => (

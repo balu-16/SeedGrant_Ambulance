@@ -70,6 +70,8 @@ export interface AnalyticsOverview {
     avg_duration_minutes: number | null;
   };
   commands: { total: number; by_status: Record<string, number> };
+  crossing?: { p50_minutes: number | null; p95_minutes: number | null; samples: number };
+  hourly_histogram?: number[];
   junctions: { junction_id: string; emergencies: number }[];
   devices: { online: number; total: number };
 }
@@ -166,4 +168,5 @@ export interface Paged<T> {
   items: T[];
   limit: number;
   offset: number;
+  total?: number;
 }

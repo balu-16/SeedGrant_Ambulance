@@ -168,6 +168,15 @@ export function getJunction(jid: string): Promise<JunctionDetail> {
   return request<JunctionDetail>(`/junctions/${jid}`);
 }
 
+export function createJunction(body: {
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_m?: number;
+}): Promise<{ id: string }> {
+  return request<{ id: string }>("/junctions", { method: "POST", body });
+}
+
 export function overrideJunction(
   jid: string,
   action: "FORCE_RELEASE" | "HOLD" | "REISSUE",

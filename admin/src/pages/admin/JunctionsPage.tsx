@@ -5,9 +5,9 @@
  * via overrideJunction, with results appended to an in-drawer Timeline.
  */
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type MouseEvent } from "react";
-import { getJunction, listJunctions, overrideJunction } from "@/services/portal";
+import { createJunction, getJunction, listJunctions, overrideJunction } from "@/services/portal";
 import type { JunctionSummary, OverrideResult } from "@/types/portal";
 import { Card, Drawer, Empty, Field, PageHeader, Table, Txt, type TableColumn } from "@/components/ui";
 import { errMsg, shortId, timelineTone } from "@/pages/admin/shared";
@@ -27,6 +27,7 @@ export function JunctionsPage() {
     queryFn: listJunctions,
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
   const items = junctions.data ?? [];
   const selected = items.find((j) => j.id === selectedId) ?? null;
 
@@ -71,6 +72,9 @@ export function JunctionsPage() {
         title="Junctions"
         subtitle="Junctions, approaches and signal configuration"
       />
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <MiniButton title="New junction" onClick={() => setCreateOpen(true)} />
+      </div>
 
       {junctions.isError ? (
         <ErrorCard
@@ -105,6 +109,51 @@ export function JunctionsPage() {
       >
         {selected && <JunctionConsole key={selected.id} junction={selected} />}
       </Drawer>
+      <Drawer
+        open={createOpen}
+        title="New junction"
+        onClose={() => setCreateOpen(false)}
+        width={420}
+      >
+        <CreateJunctionForm onDone={() => setCreateOpen(false)} />
+      </Drawer>
+    </div>
+  );
+}
+
+function CreateJunctionForm({ onDone }: { onDone: () => void }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState("");
+  const [lat, setLat] = useState("");
+  const [lon, setLon] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const m = useMutation({
+    mutationFn: () =>
+      createJunction({
+        name: name.trim(),
+        latitude: Number(lat),
+        longitude: Number(lon),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin", "junctions"] });
+      onDone();
+    },
+    onError: (e) => setErr(errMsg(e)),
+  });
+  const valid =
+    name.trim().length > 1 &&
+    Number.isFinite(Number(lat)) &&
+    Number.isFinite(Number(lon)) &&
+    Math.abs(Number(lat)) <= 90 &&
+    Math.abs(Number(lon)) <= 180;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <Field label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Benz Circle" />
+      <Field label="Latitude" value={lat} onChange={(e) => setLat(e.target.value)} placeholder="16.5058" />
+      <Field label="Longitude" value={lon} onChange={(e) => setLon(e.target.value)} placeholder="80.6520" />
+      <Txt muted>Creates the junction plus 4 standard approaches (auto).</Txt>
+      {err && <ErrorCard title="Could not create junction" error={err} onRetry={() => setErr(null)} />}
+      <MiniButton title="Create" disabled={!valid || m.isPending} onClick={() => m.mutate()} />
     </div>
   );
 }

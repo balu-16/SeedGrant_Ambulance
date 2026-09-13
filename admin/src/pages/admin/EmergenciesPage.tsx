@@ -7,6 +7,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useState, type MouseEvent } from "react";
 import { fetchEmergencies } from "@/services/portal";
+import { downloadCsv } from "@/utils/csv";
 import type { EmergencyRow } from "@/types/portal";
 import { statusTone } from "@/components/helpers";
 import {
@@ -128,8 +129,20 @@ export function EmergenciesPage() {
               </div>
             </div>
             <Txt muted style={{ marginLeft: "auto" }}>
-              offset {offset} · {items.length} rows
+              {q.data?.total != null
+                ? `${offset + 1}–${offset + items.length} of ${q.data.total}`
+                : `offset ${offset} · ${items.length} rows`}
             </Txt>
+            <MiniButton
+              title="Export CSV"
+              disabled={items.length === 0}
+              onClick={() =>
+                downloadCsv(
+                  `emergencies-${status.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`,
+                  items as unknown as Record<string, unknown>[],
+                )
+              }
+            />
             <MiniButton
               title="Prev"
               disabled={offset === 0}
@@ -137,7 +150,11 @@ export function EmergenciesPage() {
             />
             <MiniButton
               title="Next"
-              disabled={items.length < LIMIT}
+              disabled={
+                q.data?.total != null
+                  ? offset + LIMIT >= q.data.total
+                  : items.length < LIMIT
+              }
               onClick={() => setOffset(offset + LIMIT)}
             />
           </div>

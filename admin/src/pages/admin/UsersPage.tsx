@@ -67,6 +67,13 @@ export function UsersPage() {
       void qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
 
+  const roleM = useMutation({
+    mutationFn: ({ id, role }: { id: string; role: string }) =>
+      patchUser(id, { role }),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["admin", "users"] }),
+  });
+
   const hospitalNames = new Map(
     (hospitals.data ?? []).map((h) => [h.id, h.name]),
   );
@@ -76,7 +83,25 @@ export function UsersPage() {
     {
       key: "role",
       header: "Role",
-      render: (u) => <Badge label={u.role} tone={roleTone(u.role)} />,
+      render: (u) => (
+        <select
+          aria-label={`Role for ${u.email}`}
+          className="admin-select"
+          value={u.role}
+          disabled={roleM.isPending}
+          onChange={(e) => {
+            const role = e.target.value;
+            if (role !== u.role) roleM.mutate({ id: u.id, role });
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {ROLES.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
+      ),
     },
     {
       key: "is_active",
