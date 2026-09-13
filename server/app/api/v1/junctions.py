@@ -166,6 +166,32 @@ async def override_junction(
         },
     )
     await db.commit()
+    # Driver push: the officer's action changes what the driver will see at
+    # this junction — never leave the driver blind. Best-effort via session.
+    from app.integrations.notify import notify_user
+    from app.models.emergency import EmergencySession as _EmergencySession
+
+    _sess = (
+        await db.execute(
+            select(_EmergencySession).where(_EmergencySession.id == cmd.session_id)
+        )
+    ).scalar_one_or_none()
+    if _sess is not None:
+        _copy = {
+            "FORCE_RELEASE": (
+                "Priority released",
+                f"Officer released priority at {j.name} ({cmd.approach} approach).",
+            ),
+            "HOLD": (
+                "Priority on hold",
+                f"Officer paused your priority request at {j.name}. Stand by.",
+            ),
+            "REISSUE": (
+                "Priority re-issued",
+                f"Officer re-requested green for you at {j.name} ({cmd.approach} approach).",
+            ),
+        }[body.action]
+        await notify_user(db, _sess.driver_id, _copy[0], _copy[1])
     return {
         "success": True,
         "data": {

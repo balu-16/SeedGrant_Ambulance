@@ -62,8 +62,13 @@ async def start(body: StartEmergencyIn, db=Depends(get_db), user=Depends(get_cur
     await db.commit()
     from app.integrations.notify import notify_user
 
+    # Notify the driver who must act — an ADMIN starting on someone else's
+    # ambulance must alert that ambulance's driver, not themselves.
     await notify_user(
-        db, user.id, "Emergency active", f"Ambulance {amb.vehicle_no} emergency started."
+        db,
+        amb.driver_id or user.id,
+        "Emergency active",
+        f"Ambulance {amb.vehicle_no} emergency started.",
     )
     return {"success": True, "data": {"session_id": str(s.id), "status": s.status}}
 
@@ -73,8 +78,27 @@ async def gps(sid: uuid.UUID, body: GpsIn, db=Depends(get_db), user=Depends(get_
     await sweep_timeouts(db)
     s = await emg.get_session(db, sid, for_update=True)
     emg.ensure_owner(s, user)
+    from app.core.consts import ACTIVE_SESSION_STATUSES as _ACTIVE
+
+    _prev_status = s.status
     if emg.apply_timeouts(s):
         await db.commit()
+        # Inline flip (sweeper was interval-gated): tell the driver, once —
+        # skip when the session was already TIMED_OUT (sweeper notified).
+        if _prev_status in _ACTIVE:
+            from app.integrations.notify import resolve_player_ids, schedule_push
+
+            try:
+                _pids = await resolve_player_ids(db, s.driver_id)
+                if _pids:
+                    schedule_push(
+                        _pids,
+                        str(s.driver_id),
+                        "Emergency timed out",
+                        "Your emergency session expired from inactivity. Start a new one when ready.",
+                    )
+            except Exception:
+                pass
         raise Conflict("Session timed out")
     if s.status not in (
         "CREATED",
@@ -175,7 +199,21 @@ async def current(db=Depends(get_db), user=Depends(get_current_user)):
     s = (await db.execute(q)).scalar_one_or_none()
     if not s:
         return {"success": True, "data": {"active": False}}
-    emg.apply_timeouts(s)
+    _was_active = s.status in ACTIVE_SESSION_STATUSES
+    if emg.apply_timeouts(s) and _was_active:
+        from app.integrations.notify import resolve_player_ids, schedule_push
+
+        try:
+            _pids = await resolve_player_ids(db, s.driver_id)
+            if _pids:
+                schedule_push(
+                    _pids,
+                    str(s.driver_id),
+                    "Emergency timed out",
+                    "Your emergency session expired from inactivity. Start a new one when ready.",
+                )
+        except Exception:
+            pass
     await db.commit()
     return {
         "success": True,

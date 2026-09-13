@@ -42,6 +42,9 @@ async def sweep_timeouts(db, force: bool = False) -> dict:
         .scalars()
         .all()
     )
+    # Drivers whose sessions flip to TIMED_OUT in this sweep — notified below
+    # (fire-and-forget) so the driver learns the session died silently.
+    timed_out_drivers: list = []
     for sess in sessions:
         last = sess.last_gps_at or sess.started_at
         stale_gps = last and (now - last) > timedelta(minutes=s.INACTIVITY_TIMEOUT_MINUTES)
@@ -53,6 +56,7 @@ async def sweep_timeouts(db, force: bool = False) -> dict:
             sess.ended_reason = "TIMED_OUT"
             sess.ended_at = now
             counts["sessions_timed_out"] += 1
+            timed_out_drivers.append(sess.driver_id)
             cmds = (
                 (
                     await db.execute(
@@ -95,6 +99,23 @@ async def sweep_timeouts(db, force: bool = False) -> dict:
 
     if any(counts.values()):
         await db.flush()
+
+    # Fire-and-forget timeout pushes (background task, never raises) — only
+    # for sessions this sweep actually flipped, so no duplicate notifies.
+    for driver_id in timed_out_drivers:
+        try:
+            from app.integrations.notify import resolve_player_ids, schedule_push
+
+            player_ids = await resolve_player_ids(db, driver_id)
+            if player_ids:
+                schedule_push(
+                    player_ids,
+                    str(driver_id),
+                    "Emergency timed out",
+                    "Your emergency session expired from inactivity. Start a new one when ready.",
+                )
+        except Exception:
+            log.warning("timeout_push_skipped", driver_id=str(driver_id))
     return counts
 
 

@@ -11,7 +11,6 @@ polling) so the junction's Raspberry Pi controller can clear the way.
 | `server/` | FastAPI backend (Python 3.12, SQLAlchemy async, PostgreSQL/Supabase, Alembic, MQTT, Expo push). Also serves the built admin portal at `/admin`. See `server/README.md`. |
 | `client/` | Expo (React Native) driver app — onboarding, login, home (emergency session + GPS), history, profile. **Nested git repository** (not tracked by the outer repo — clone/push it separately). See `client/README.md`. |
 | `admin/` | Vite + React admin portal (ADMIN / POLICE / HOSPITAL personas). Built with `npm run build`; served by the backend at `http://localhost:8000/admin/`. See `admin/README.md`. |
-| `reference/` | UI design mockups the client implements (splash, login, home, history, profile). |
 | `docker-compose.yml` | Local PostgreSQL 16 (`docker compose up -d db`) so the backend can run without a Supabase account. |
 
 Backend architecture note: inference runs on the Raspberry Pi (edge) and is ingested via
@@ -71,8 +70,6 @@ The app runs fully offline as a demo by default; set `EXPO_PUBLIC_API_URL` in
 ## Development infrastructure
 
 - `LICENSE` — MIT.
-- `.github/workflows/ci.yml` — server (uv sync + ruff + pytest) and admin (tsc + oxlint +
-  build) on push/PR. The driver app has its own workflow inside the nested `client/` repo.
 - `.editorconfig` — shared editor defaults (4-space Python, 2-space JS/TS).
 - Both repositories have **no git remote configured** — create private remotes and push
   both (outer repo and `client/`) before relying on them.

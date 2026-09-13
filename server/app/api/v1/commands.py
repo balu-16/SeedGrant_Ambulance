@@ -93,6 +93,21 @@ async def ack(cid: uuid.UUID, db=Depends(get_db), dev=Depends(device_from_key)):
         {"command_id": str(c.id), "junction_id": str(c.junction_id)},
     )
     await db.commit()
+    # Driver push: the Pi acted on the priority request — confirm the green.
+    # Best-effort (notify_user never raises); resolve the driver via session.
+    from app.integrations.notify import notify_user
+    from app.models.emergency import EmergencySession
+
+    sess = (
+        await db.execute(select(EmergencySession).where(EmergencySession.id == c.session_id))
+    ).scalar_one_or_none()
+    if sess is not None:
+        await notify_user(
+            db,
+            sess.driver_id,
+            "Green confirmed",
+            f"Junction acknowledged your priority request ({c.approach} approach).",
+        )
     return {"success": True, "data": {"acked": True}}
 
 
