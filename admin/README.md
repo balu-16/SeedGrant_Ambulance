@@ -6,9 +6,12 @@ use the Expo app in `client/`, never this portal). Built in the same visual
 language as the driver app: design tokens are copied verbatim from
 `client/constants/theme.ts` and the UI kit mirrors `client/components/ui.tsx`.
 
-**Status: scaffold (portal plan §6).** Login, guarded shell, role-aware
-navigation and the full UI kit are real; data pages render placeholder/empty
-states and get wired to the backend in phases 3-5.
+**Status: complete.** All three persona page sets (ADMIN / HOSPITAL / POLICE)
+are implemented and wired to the live backend: live map, emergencies with
+timelines + CSV export, users/hospitals/junctions management, fleet, device
+health with telemetry drawers, alerts, analytics, audit, command log with
+manual overrides, and settings. Not implemented (deliberately): SSE live
+streams (10 s polling is used instead) and portal e2e tests.
 
 ## Stack
 
@@ -70,9 +73,10 @@ throws `ApiError { message, status, code }` from
 
 ## Production
 
-The portal is a single-origin static build: FastAPI mounts `admin/dist` at
-`/admin` (`StaticFiles(html=True)`), so the same-origin `/api/v1` base keeps
-working with no CORS configuration.
+The portal is a single-origin static build: FastAPI serves `admin/dist` at
+`/admin` (guarded mount + SPA fallback in `server/app/main.py`), so the
+same-origin `/api/v1` base keeps working with no CORS configuration. Vite's
+`base` is set to `/admin/` accordingly.
 
 ## Structure
 
@@ -80,9 +84,10 @@ working with no CORS configuration.
 admin/src/
 ├── app/          # AuthProvider + useAuth, nav config, guards, shell layout
 ├── components/   # ui.tsx (kit mirroring client/components/ui.tsx) + helpers
-├── pages/        # LoginPage, DashboardPage, PlaceholderPage
-├── services/     # tokenStorage (localStorage) + api.ts (request/refresh)
+├── pages/        # LoginPage + portalRoutes/adminRoutes + admin/, hospital/, police/, shared/
+├── services/     # tokenStorage (localStorage) + api.ts (request/refresh) + portal.ts (endpoints)
 ├── styles/       # theme.css (app tokens verbatim), ui.css, layout.css
-├── types/        # Role, AuthUser, Tokens, ApiEnvelope
+├── types/        # api.ts (auth/envelope) + portal.ts (portal contracts)
+├── utils/        # csv.ts (client-side CSV export)
 └── main.tsx      # providers: QueryClient → BrowserRouter → AuthProvider
 ```

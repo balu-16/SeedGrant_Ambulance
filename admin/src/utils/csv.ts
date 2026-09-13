@@ -5,6 +5,9 @@
  */
 
 const NEEDS_QUOTES = /[",\n\r]/;
+// Spreadsheet formula-injection guard: cells starting with these characters are
+// evaluated as formulas by Excel/LibreOffice — prefix with ' to neuter them.
+const FORMULA_LEAD = /^[=+\-@\t\r]/;
 
 function csvCell(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -14,7 +17,8 @@ function csvCell(value: unknown): string {
       : typeof value === "object"
         ? JSON.stringify(value)
         : String(value);
-  return NEEDS_QUOTES.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
+  const safe = FORMULA_LEAD.test(raw) ? `'${raw}` : raw;
+  return NEEDS_QUOTES.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
 /**

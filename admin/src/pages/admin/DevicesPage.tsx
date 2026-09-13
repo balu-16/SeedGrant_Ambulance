@@ -139,9 +139,8 @@ function TelemetryList({
     refetchInterval: 10_000,
   });
 
-  const rows = [...(q.data ?? [])].sort(
-    (a, b) =>
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  const rows = [...(q.data?.items ?? [])].sort(
+    (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
   );
 
   return (
@@ -165,10 +164,10 @@ function TelemetryList({
         />
       ) : (
         <div className="admin-scroll">
-          {rows.map((r) => (
-            <Card key={r.id} style={{ padding: 12 }}>
+          {rows.map((r, i) => (
+            <Card key={`${r.at}-${i}`} style={{ padding: 12 }}>
               <Txt muted className="admin-mono">
-                {fmtDateTime(r.created_at)}
+                {fmtDateTime(r.at)}
               </Txt>
               <pre
                 className="admin-mono"

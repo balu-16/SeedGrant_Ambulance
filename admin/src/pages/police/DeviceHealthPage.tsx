@@ -146,13 +146,13 @@ export function PoliceDeviceHealthPage() {
               <Loading label="Loading telemetry" />
             ) : telemetry.error ? (
               <InlineError error={telemetry.error} fallback="Could not load telemetry." />
-            ) : (telemetry.data ?? []).length === 0 ? (
+            ) : (telemetry.data?.items ?? []).length === 0 ? (
               <Txt muted>No telemetry received yet.</Txt>
             ) : (
-              (telemetry.data ?? []).map((row) => (
-                <Card key={row.id} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              (telemetry.data?.items ?? []).map((row, i) => (
+                <Card key={`${row.at}-${i}`} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <Txt muted style={{ fontSize: 12 }}>
-                    {fmtDateTime(row.created_at)}
+                    {fmtDateTime(row.at)}
                   </Txt>
                   <pre
                     style={{

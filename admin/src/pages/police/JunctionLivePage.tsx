@@ -280,14 +280,14 @@ export function PoliceJunctionLivePage() {
                 <Loading label="Loading telemetry" />
               ) : telemetry.error ? (
                 <InlineError error={telemetry.error} fallback="Could not load telemetry." />
-              ) : (telemetry.data ?? []).length === 0 ? (
+              ) : (telemetry.data?.items ?? []).length === 0 ? (
                 <Txt muted>No telemetry received yet.</Txt>
               ) : (
                 <Card style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {(telemetry.data ?? []).map((row) => (
-                    <div key={row.id} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  {(telemetry.data?.items ?? []).map((row, i) => (
+                    <div key={`${row.at}-${i}`} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                       <Txt muted style={{ fontSize: 12 }}>
-                        {fmtDateTime(row.created_at)} · {fmtRelative(row.created_at)}
+                        {fmtDateTime(row.at)} · {fmtRelative(row.at)}
                       </Txt>
                       <pre
                         style={{

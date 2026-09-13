@@ -66,10 +66,11 @@ export function durationMinutes(
   return Number.isNaN(ms) ? null : Math.round((ms / 60_000) * 10) / 10;
 }
 
-/** Alert severity → Badge tone (plan §4.2 Alerts feed). */
-export function severityTone(severity: "high" | "medium" | "low"): BadgeTone {
-  if (severity === "high") return "red";
-  if (severity === "medium") return "purple";
+/** Alert severity → Badge tone (plan §4.2 Alerts feed). The backend emits
+ * "warning" | "critical" — anything else falls through to neutral. */
+export function severityTone(severity: string): BadgeTone {
+  if (severity === "critical") return "red";
+  if (severity === "warning") return "purple";
   return "neutral";
 }
 

@@ -57,7 +57,8 @@ export function LoginPage() {
       }
       const from = location.state?.from;
       navigate(
-        typeof from === "string" && from.startsWith("/")
+        // reject protocol-relative URLs ("//evil.com") as well as non-paths
+        typeof from === "string" && from.startsWith("/") && !from.startsWith("//")
           ? from
           : homeFor(signedIn.role),
         { replace: true },

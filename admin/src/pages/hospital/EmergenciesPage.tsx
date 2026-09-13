@@ -27,9 +27,10 @@ const PAGE_SIZE = 25;
 
 const STATUS_OPTIONS = [
   { value: "", label: "All statuses" },
-  { value: "ACTIVE", label: "Active" },
+  { value: "ACTIVE", label: "Active (all in-flight)" },
   { value: "COMPLETED", label: "Completed" },
   { value: "CANCELLED", label: "Cancelled" },
+  { value: "TIMED_OUT", label: "Timed out" },
 ];
 
 export function HospitalEmergenciesPage() {

@@ -6,6 +6,9 @@ import { defineConfig } from "vite";
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // The built portal is served by FastAPI under /admin (see server/app/main.py);
+  // `vite dev` then also serves the app at http://localhost:5173/admin/.
+  base: "/admin/",
   resolve: {
     alias: {
       // Mirrors the client app's "@/..." import style.

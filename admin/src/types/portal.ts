@@ -4,8 +4,6 @@
  * request<T>() so they inherit single-flight refresh + envelope unwrapping.
  */
 
-export type PortalRole = "ADMIN" | "HOSPITAL" | "POLICE";
-
 export interface PortalUser {
   id: string;
   email: string;
@@ -57,7 +55,8 @@ export type AlertType = "device_offline" | "command_expired" | "session_timed_ou
 
 export interface PortalAlert {
   type: AlertType;
-  severity: "high" | "medium" | "low";
+  /** Values the backend actually emits (admin.py alerts feed). */
+  severity: "warning" | "critical";
   message: string;
   at: string;
   refs: Record<string, string>;
@@ -138,10 +137,8 @@ export interface DeviceStatus {
 }
 
 export interface TelemetryRow {
-  id: string;
-  junction_id: string;
   payload: Record<string, unknown>;
-  created_at: string;
+  at: string;
 }
 
 export interface DetectionRow {

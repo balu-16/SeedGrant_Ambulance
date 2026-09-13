@@ -78,7 +78,20 @@ export function AuthProvider({ children }: PropsWithChildren) {
         );
       }
       // Re-verify server-side (role from the fresh token, not the login claim).
-      const me = await apiMe().catch(() => res.user);
+      // A /me failure must NOT fall back to the login user: that payload lacks
+      // hospital_id/junction_ids, which would silently blank out the officer's
+      // or hospital's entire scope. Fail the login loudly instead.
+      let me: AuthUser;
+      try {
+        me = await apiMe();
+      } catch {
+        clearTokens();
+        throw new ApiError(
+          "Signed in, but the account profile could not be loaded — try again.",
+          502,
+          "PROFILE_UNAVAILABLE",
+        );
+      }
       setUser(me);
       queryClient.clear();
       return me;

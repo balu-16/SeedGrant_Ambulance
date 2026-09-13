@@ -18,7 +18,7 @@ import {
 } from "@/services/tokenStorage";
 import type { ApiEnvelope, AuthUser, LoginResponse, Tokens } from "@/types/api";
 
-export { TOKENS_KEY, clearTokens, getTokens, saveTokens } from "@/services/tokenStorage";
+export { clearTokens, getTokens, saveTokens } from "@/services/tokenStorage";
 
 const API_BASE = "/api/v1";
 

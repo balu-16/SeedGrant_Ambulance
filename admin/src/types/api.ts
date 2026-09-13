@@ -5,13 +5,6 @@
 
 export type Role = "ADMIN" | "HOSPITAL" | "POLICE" | "DRIVER";
 
-/** Roles allowed on this portal (DRIVER uses the mobile app, not the web). */
-export const PORTAL_ROLES: readonly Role[] = ["ADMIN", "HOSPITAL", "POLICE"];
-
-export function isPortalRole(role: string): role is "ADMIN" | "HOSPITAL" | "POLICE" {
-  return (PORTAL_ROLES as readonly string[]).includes(role);
-}
-
 export interface AuthUser {
   id: string;
   email: string;

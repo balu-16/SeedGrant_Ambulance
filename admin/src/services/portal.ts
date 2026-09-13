@@ -6,7 +6,6 @@
 
 import { request } from "@/services/api";
 import type {
-  AlertType,
   Ambulance,
   AnalyticsOverview,
   AuditEntry,
@@ -198,7 +197,7 @@ export function listDevices(): Promise<
   return request("/admin/devices/status");
 }
 
-export function listTelemetry(junctionId: string, limit = 50): Promise<TelemetryRow[]> {
+export function listTelemetry(junctionId: string, limit = 50): Promise<Paged<TelemetryRow>> {
   return request(`/telemetry?junction_id=${junctionId}&limit=${limit}`);
 }
 
@@ -209,11 +208,6 @@ export function listDetections(params: { junction_id?: string; limit?: number } 
     Object.entries(params).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]),
   );
   return request<DetectionRow[]>(`/vision/detections?${q}`);
-}
-
-/** Map alert type → badge severity helper for feeds. */
-export function isCriticalAlert(type: AlertType): boolean {
-  return type === "device_offline" || type === "session_timed_out";
 }
 
 // ---- self service (HOSPITAL / POLICE) ---------------------------------------
