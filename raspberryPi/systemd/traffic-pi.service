@@ -1,0 +1,15 @@
+[Unit]
+Description=SeedGrant traffic edge controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/seedgrant/raspberryPi/src
+EnvironmentFile=/opt/seedgrant/raspberryPi/.env
+ExecStart=/opt/seedgrant/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

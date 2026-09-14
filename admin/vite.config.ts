@@ -6,9 +6,10 @@ import { defineConfig } from "vite";
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  // The built portal is served by FastAPI under /admin (see server/app/main.py);
-  // `vite dev` then also serves the app at http://localhost:5173/admin/.
-  base: "/admin/",
+  // Standalone deployment (Vercel) serves from "/".
+  // Legacy note: the portal was once served by FastAPI under /admin
+  // (see server/app/main.py); `vite dev` serves at http://localhost:5173/.
+  base: "/",
   resolve: {
     alias: {
       // Mirrors the client app's "@/..." import style.
@@ -17,9 +18,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      // The portal calls the same FastAPI backend as the driver app.
-      // Dev only — in production the built portal is mounted at /admin on
-      // the FastAPI origin itself (see README).
+      // Local dev only — production (Vercel) calls VITE_API_URL directly.
       "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,

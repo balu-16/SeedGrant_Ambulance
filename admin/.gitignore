@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+.vercel/
+
+# Local env overrides (VITE_API_URL etc. for dev)
+.env*.local
 
 # Editor directories and files
 .vscode/*

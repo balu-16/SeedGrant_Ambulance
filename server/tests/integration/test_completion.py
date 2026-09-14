@@ -38,7 +38,7 @@ async def test_mine_embeds_hospital_and_on_duty(client, admin, driver, ambulance
     h = await _create_hospital(client, admin, "Test General")
     r = await client.patch(
         f"/api/v1/ambulances/{ambulance['id']}",
-        json={"hospital_id": h["id"]},
+        json={"hospital_id": h["id"], "driver_id": str(driver["user"].id)},
         headers=admin["headers"],
     )
     assert r.status_code == 200, r.text
@@ -52,7 +52,7 @@ async def test_mine_embeds_hospital_and_on_duty(client, admin, driver, ambulance
     # duty state flips through the fleet API and is visible to the driver
     r = await client.patch(
         f"/api/v1/ambulances/{ambulance['id']}",
-        json={"on_duty": False},
+        json={"on_duty": False, "driver_id": str(driver["user"].id)},
         headers=admin["headers"],
     )
     r = await client.get("/api/v1/ambulances/mine", headers=driver["headers"])
@@ -80,12 +80,14 @@ async def test_history_returns_events_distance_and_junctions(
     rows = r.json()["data"]
     assert rows, "history should contain the stopped session"
     row = rows[0]
-    assert row["junctions_crossed"] == 0  # one fix cannot cross a junction
+    # the 150m fix inside the radius mints exactly one PRIORITY_REQUEST junction
+    cmd_events = [e for e in row["events"] if e["kind"] == "command"]
+    assert row["junctions_crossed"] == len({e["junction_id"] for e in cmd_events
+                                             if e["type"] == "PRIORITY_REQUEST"})
     assert row["distance_m"] >= 0
     kinds = [e["kind"] for e in row["events"]]
     assert kinds[0] == "session" and row["events"][0]["type"] == "started"
-    assert kinds[-1] == "session"  # ended event present
-    assert any(e["kind"] == "command" or e["type"] == "started" for e in row["events"])
+    assert kinds[-1] == "session" and row["events"][-1]["status"] == "COMPLETED"
 
 
 async def test_login_sets_last_login_visible_to_admin(client, admin, db_factory):
@@ -98,7 +100,8 @@ async def test_login_sets_last_login_visible_to_admin(client, admin, db_factory)
         ).scalar_one()
         assert row.last_login_at is not None
     r = await client.get("/api/v1/admin/users", headers=admin["headers"])
-    emails = {row["email"]: row for row in r.json()["data"]}
+    items = r.json()["data"]["items"]
+    emails = {row["email"]: row for row in items}
     assert emails[u.email]["last_login"] is not None
 
 
@@ -224,9 +227,15 @@ async def test_command_log_since_until(client, admin, db_factory):
     assert r.status_code == 200 and r.json()["data"], r.text
     created = r.json()["data"][0]["created_at"]
 
+    from datetime import UTC, datetime, timedelta
+
+    ts = datetime.fromisoformat(created)
     r = await client.get(
         "/api/v1/commands/admin/list",
-        params={"since": created, "until": created},
+        params={
+            "since": (ts - timedelta(seconds=1)).isoformat(),
+            "until": (ts + timedelta(seconds=1)).isoformat(),
+        },
         headers=admin["headers"],
     )
     assert len(r.json()["data"]) >= 1

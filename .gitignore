@@ -1,10 +1,13 @@
 # Secrets & large artifacts — never commit real credentials or weights.
 .env
+.env*.local
 *.pt
+*.onnx
 *firebase-adminsdk*.json
 **/google-services.json
 .venv/
 node_modules/
+.vercel/
 
 # Tool & OS caches
 __pycache__/
@@ -13,9 +16,6 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .DS_Store
-
-# Client has its own git repository
-client/
 
 # ZCode local session config
 .zcode/

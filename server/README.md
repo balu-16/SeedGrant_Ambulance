@@ -83,9 +83,10 @@ seed only. Refresh tokens rotate on every refresh; a rotated token is rejected.
 - `POST|GET /vision/detections` (Pi-side inference ingest + portal listing; the server runs no model)
 - `GET /health`, `GET /ready` (503 when DB down)
 
-## Admin portal hosting
+## Admin portal hosting (legacy)
 
-After `cd ../admin && npm run build`, the API serves the portal at
-`http://localhost:8000/admin/` (SPA fallback included) — same origin, so the portal's
-`/api/v1` base needs no CORS. Dev alternative: `npm run dev` in `admin/` (Vite proxies
-`/api` to :8000).
+The portal now deploys standalone on Vercel (see `../admin/README.md`) and
+calls this API cross-origin via `VITE_API_URL`, so keep `CORS_ORIGINS`
+in sync with the Vercel URL. The old same-origin mount (`admin/dist` served
+at `/admin` via `app/main.py`) is retained as a guarded fallback only and
+`admin/dist` is not built on Render.

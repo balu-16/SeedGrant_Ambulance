@@ -7,8 +7,8 @@
  * mapping. Pages/services must use this module — no hardcoded URLs elsewhere.
  *
  * In dev, Vite proxies `/api` → http://localhost:8000 (see vite.config.ts).
- * In production the built portal is mounted on the FastAPI origin at /admin,
- * so the same-origin `/api/v1` base keeps working unchanged.
+ * In production (Vercel) the backend URL comes from `VITE_API_URL`
+ * (e.g. https://seedgrant-backend.onrender.com/api/v1).
  */
 
 import {
@@ -20,7 +20,9 @@ import type { ApiEnvelope, AuthUser, LoginResponse, Tokens } from "@/types/api";
 
 export { clearTokens, getTokens, saveTokens } from "@/services/tokenStorage";
 
-const API_BASE = "/api/v1";
+const API_BASE =
+  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ||
+  "/api/v1";
 
 export class ApiError extends Error {
   status: number;

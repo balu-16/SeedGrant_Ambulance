@@ -1,5 +1,6 @@
 # Local secrets — never commit
 .env
+.env*.local
 
 # Python caches
 __pycache__/
@@ -7,6 +8,11 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.venv/
+
+# Logs
+*.log
 
 # Model weights stay out of VCS
 *.pt
+*.onnx

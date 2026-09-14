@@ -1,0 +1,12 @@
+# Pi runtime deps (Raspberry Pi OS 64-bit, Python 3.11+).
+# Install: pip install -r requirements-pi.txt
+numpy>=1.26
+opencv-python-headless>=4.9
+onnxruntime>=1.17          # ONNX default backend (CPUExecutionProvider on Pi)
+ultralytics>=8.2           # .pt fallback backend only
+paho-mqtt>=1.6
+httpx>=0.27
+python-dotenv>=1.0
+pyyaml>=6.0
+# dev/test only (laptop):
+pytest>=8.0

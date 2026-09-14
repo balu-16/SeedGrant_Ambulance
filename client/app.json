@@ -1,0 +1,90 @@
+{
+  "expo": {
+    "name": "Ambulance Driver",
+    "slug": "ambulance-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/app-icon.png",
+    "scheme": "ambulance-driver",
+    "userInterfaceStyle": "light",
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/app-icon.png",
+        "backgroundColor": "#E9F4FF"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.seedgrant.ambulancedriver",
+      "versionCode": 1,
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "VIBRATE",
+        "POST_NOTIFICATIONS"
+      ]
+    },
+    "ios": {
+      "buildNumber": "1",
+      "bundleIdentifier": "com.seedgrant.ambulancedriver",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Live location is used to share your position with traffic control during an emergency and draw your route to the hospital.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Background location keeps sharing your position with traffic control while the emergency runs, even when the app is in the background.",
+        "NSLocationAlwaysUsageDescription": "Background location keeps sharing your position with traffic control while the emergency runs.",
+        "UIBackgroundModes": ["location", "fetch", "remote-notification"]
+      }
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/app-icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#F3F8FF",
+          "image": "./assets/images/app-icon.png",
+          "imageWidth": 100
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#1475FF"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Background location keeps sharing your position with traffic control while the emergency runs, even when the app is in the background.",
+          "locationWhenInUsePermission": "Live location is used to share your position with traffic control during an emergency and draw your route to the hospital.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "bc1e802e-4812-4d19-903d-7e2f58c2b7d1"
+      },
+      "router": {}
+    },
+    "experiments": {
+      "typedRoutes": true
+    },
+    "owner": "seedgrant2026",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/bc1e802e-4812-4d19-903d-7e2f58c2b7d1"
+    }
+  }
+}

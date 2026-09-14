@@ -36,7 +36,8 @@ npm run preview   # serve the production build locally
 
 In dev the portal calls same-origin `/api/v1`; Vite proxies `/api` →
 `http://localhost:8000` (FastAPI) — see `vite.config.ts`. So run the backend on
-port 8000 and log in with a seeded portal account.
+port 8000 and log in with a seeded portal account. Set `VITE_API_URL` in
+`.env.local` (see `.env.example`) to point at any other backend.
 
 ## Roles & navigation
 
@@ -71,12 +72,13 @@ All requests go through `request<T>()`, which unwraps the backend envelope and
 throws `ApiError { message, status, code }` from
 `{ success, data, error: { code, message } }`.
 
-## Production
+## Production (Vercel)
 
-The portal is a single-origin static build: FastAPI serves `admin/dist` at
-`/admin` (guarded mount + SPA fallback in `server/app/main.py`), so the
-same-origin `/api/v1` base keeps working with no CORS configuration. Vite's
-`base` is set to `/admin/` accordingly.
+Standalone deployment: Vite `base` is `/`, backend comes from `VITE_API_URL`,
+and `vercel.json` provides the SPA fallback. Create a Vercel project with
+Root Directory `admin/`, build `npm ci && npm run build`, output `dist`, and
+env `VITE_API_URL=https://seedgrant-backend.onrender.com/api/v1`.
+Add the Vercel URL to the backend's `CORS_ORIGINS` on Render.
 
 ## Structure
 

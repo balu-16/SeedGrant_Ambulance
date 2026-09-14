@@ -1,0 +1,10 @@
+# Raspberry Pi edge runtime — NOT committed (.env holds device key).
+.env
+.env*.local
+.venv/
+__pycache__/
+*.pyc
+*.log
+# Weights are copied to weights/, never committed (root *.pt/*.onnx rules also cover these).
+*.pt
+*.onnx
