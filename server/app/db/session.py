@@ -10,7 +10,16 @@ def get_engine():
     global _engine
     if _engine is None:
         s = get_settings()
-        _engine = create_async_engine(s.DATABASE_URL, pool_pre_ping=True, future=True)
+        # Supabase pooler (:6543) runs pgbouncer in transaction mode, which does
+        # not support prepared statements. asyncpg must disable its statement
+        # cache or every connect fails with DuplicatePreparedStatementError
+        # (see Render build dep-dakkk8dbedkc73eldic0).
+        connect_args = {}
+        if s.DATABASE_URL.startswith("postgresql+asyncpg"):
+            connect_args = {"statement_cache_size": 0}
+        _engine = create_async_engine(
+            s.DATABASE_URL, pool_pre_ping=True, future=True, connect_args=connect_args
+        )
     return _engine
 
 
