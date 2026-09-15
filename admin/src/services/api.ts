@@ -17,12 +17,27 @@ import {
   saveTokens,
 } from "@/services/tokenStorage";
 import type { ApiEnvelope, AuthUser, LoginResponse, Tokens } from "@/types/api";
+import { normalizeRole } from "@/types/api";
 
 export { clearTokens, getTokens, saveTokens } from "@/services/tokenStorage";
 
-const API_BASE =
-  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ||
-  "/api/v1";
+function normalizeBase(raw: string | undefined): string {
+  let b = (raw ?? "").trim().replace(/\/+$/, "");
+  if (!b) return "/api/v1";
+  // Accept bare origin (…onrender.com) or full prefix (…/api/v1); never double it.
+  if (!/\/api\/v1$/i.test(b)) b += "/api/v1";
+  return b;
+}
+
+const API_BASE = normalizeBase(
+  import.meta.env.VITE_API_URL as string | undefined,
+);
+
+if (import.meta.env.PROD && API_BASE === "/api/v1") {
+  console.warn(
+    "VITE_API_URL is unset — admin portal will call same-origin /api/v1 and fail. Set VITE_API_URL=https://seedgrant-backend.onrender.com/api/v1 in Vercel.",
+  );
+}
 
 export class ApiError extends Error {
   status: number;
@@ -148,11 +163,13 @@ export async function apiLogin(
     access_token: data.access_token,
     refresh_token: data.refresh_token,
   });
+  data.user = { ...data.user, role: normalizeRole(data.user.role) };
   return data;
 }
 
 export async function apiMe(): Promise<AuthUser> {
-  return request<AuthUser>("/auth/me");
+  const me = await request<AuthUser>("/auth/me");
+  return { ...me, role: normalizeRole(me.role) };
 }
 
 export async function apiLogout(): Promise<void> {

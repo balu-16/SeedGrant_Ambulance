@@ -338,7 +338,7 @@ async def create_user(
     u = User(
         email=body.email.lower(),
         password_hash=pw_hash,
-        role=body.role,
+        role=str(body.role).lower(),
         hospital_id=body.hospital_id or None,
     )
     db.add(u)

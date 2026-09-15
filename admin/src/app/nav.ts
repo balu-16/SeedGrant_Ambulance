@@ -9,7 +9,11 @@
 
 import type { Role } from "@/types/api";
 
-export type PortalRole = Exclude<Role, "DRIVER">;
+export type PortalRole = Exclude<Role, "driver">;
+
+function norm(r: string): string {
+  return r.trim().toLowerCase();
+}
 
 export interface NavItem {
   to: string;
@@ -26,7 +30,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     to: "/",
     label: "Dashboard",
     icon: "dashboard",
-    roles: ["ADMIN", "HOSPITAL", "POLICE"],
+    roles: ["admin", "hospital", "police"],
     subtitle: "Overview of the emergency priority system",
   },
   // ---- ADMIN ----
@@ -34,91 +38,91 @@ export const NAV_ITEMS: readonly NavItem[] = [
     to: "/map",
     label: "Live Map",
     icon: "map",
-    roles: ["ADMIN"],
+    roles: ["admin"],
     subtitle: "Active emergencies and junction states on one map",
   },
   {
     to: "/emergencies",
     label: "Emergencies",
     icon: "emergency",
-    roles: ["ADMIN", "HOSPITAL"],
+    roles: ["admin", "hospital"],
     subtitle: "Emergency history with event timelines and exports",
   },
   {
     to: "/users",
     label: "Users",
     icon: "group",
-    roles: ["ADMIN"],
+    roles: ["admin"],
     subtitle: "Portal accounts, roles and scope assignments",
   },
   {
     to: "/hospitals",
     label: "Hospitals",
     icon: "local_hospital",
-    roles: ["ADMIN"],
+    roles: ["admin"],
     subtitle: "Hospital registry and ambulance assignment",
   },
   {
     to: "/junctions",
     label: "Junctions",
     icon: "traffic",
-    roles: ["ADMIN"],
+    roles: ["admin"],
     subtitle: "Junctions, approaches and signal configuration",
   },
   {
     to: "/junctions",
     label: "My Junctions",
     icon: "traffic",
-    roles: ["POLICE"],
+    roles: ["police"],
     subtitle: "Junctions assigned to you and their live state",
   },
   {
     to: "/devices",
     label: "Devices",
     icon: "memory",
-    roles: ["ADMIN"],
+    roles: ["admin"],
     subtitle: "Registered Pi devices, keys and heartbeats",
   },
   {
     to: "/devices",
     label: "Device Health",
     icon: "monitor_heart",
-    roles: ["POLICE"],
+    roles: ["police"],
     subtitle: "Online state, heartbeats and telemetry of your devices",
   },
   {
     to: "/fleet",
     label: "Fleet",
     icon: "local_shipping",
-    roles: ["ADMIN"],
+    roles: ["admin"],
     subtitle: "All ambulances, drivers and on-duty status",
   },
   {
     to: "/fleet",
     label: "My Fleet",
     icon: "local_shipping",
-    roles: ["HOSPITAL"],
+    roles: ["hospital"],
     subtitle: "Your ambulances, drivers and on-duty status",
   },
   {
     to: "/analytics",
     label: "Analytics",
     icon: "monitoring",
-    roles: ["ADMIN", "POLICE"],
+    roles: ["admin", "police"],
     subtitle: "Crossing times, command outcomes and peak hours",
   },
   {
     to: "/audit",
     label: "Audit",
     icon: "receipt_long",
-    roles: ["ADMIN"],
+    roles: ["admin"],
     subtitle: "Every audited action with actor and filters",
   },
   {
     to: "/system",
     label: "System",
     icon: "dns",
-    roles: ["ADMIN"],
+    roles: ["admin"],
     subtitle: "Sweeps, config checks, retention and MQTT health",
   },
   // ---- HOSPITAL ----
@@ -126,28 +130,28 @@ export const NAV_ITEMS: readonly NavItem[] = [
     to: "/tracking",
     label: "Live Tracking",
     icon: "my_location",
-    roles: ["HOSPITAL"],
+    roles: ["hospital"],
     subtitle: "Your active emergencies, live positions and priority state",
   },
   {
     to: "/drivers",
     label: "Drivers",
     icon: "badge",
-    roles: ["HOSPITAL"],
+    roles: ["hospital"],
     subtitle: "Drivers linked to your hospital and their activity",
   },
   {
     to: "/alerts",
     label: "Alerts",
     icon: "notifications_active",
-    roles: ["HOSPITAL"],
+    roles: ["hospital"],
     subtitle: "Fleet emergency, timeout and device-offline alerts",
   },
   {
     to: "/settings",
     label: "Settings",
     icon: "settings",
-    roles: ["HOSPITAL", "POLICE"],
+    roles: ["hospital", "police"],
     subtitle: "Profile, password and notification preferences",
   },
   // ---- POLICE ----
@@ -155,13 +159,16 @@ export const NAV_ITEMS: readonly NavItem[] = [
     to: "/commands",
     label: "Command Log",
     icon: "terminal",
-    roles: ["POLICE"],
+    roles: ["police"],
     subtitle: "Commands for your junctions with status and retries",
   },
 ];
 
-export function navFor(role: PortalRole): NavItem[] {
-  return NAV_ITEMS.filter((item) => item.roles.includes(role));
+export function navFor(role: PortalRole | string): NavItem[] {
+  const r = norm(role);
+  return NAV_ITEMS.filter((item) =>
+    item.roles.map(norm).includes(r),
+  );
 }
 
 /** Union of roles allowed on a path (across per-role duplicates). */
@@ -190,7 +197,7 @@ export function homeFor(_role: Role): string {
 /** Best-match sidebar entry for the current location (used by the top bar). */
 export function currentNavItem(
   pathname: string,
-  role: PortalRole,
+  role: PortalRole | string,
 ): NavItem | undefined {
   const items = navFor(role);
   return (

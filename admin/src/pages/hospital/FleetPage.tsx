@@ -34,7 +34,7 @@ import { Loading, InlineError, SelectField } from "@/pages/shared/bits";
 export function HospitalFleetPage() {
   const { user } = useAuth();
   const { pathname } = useLocation();
-  const item = currentNavItem(pathname, (user?.role ?? "HOSPITAL") as PortalRole);
+  const item = currentNavItem(pathname, (user?.role ?? "hospital") as PortalRole);
   const queryClient = useQueryClient();
 
   const [createOpen, setCreateOpen] = useState(false);

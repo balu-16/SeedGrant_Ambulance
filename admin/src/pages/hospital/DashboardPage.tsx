@@ -27,7 +27,7 @@ const LIVE_REFRESH = 10_000;
 export function HospitalDashboardPage() {
   const { user } = useAuth();
   const { pathname } = useLocation();
-  const item = currentNavItem(pathname, (user?.role ?? "HOSPITAL") as PortalRole);
+  const item = currentNavItem(pathname, (user?.role ?? "hospital") as PortalRole);
 
   const live = useQuery({
     queryKey: ["live"],

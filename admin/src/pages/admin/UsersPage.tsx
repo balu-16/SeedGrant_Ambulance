@@ -44,7 +44,7 @@ import {
 } from "@/pages/admin/widgets";
 import "@/pages/admin/admin.css";
 
-const ROLES = ["ADMIN", "HOSPITAL", "POLICE", "DRIVER"];
+const ROLES = ["admin", "hospital", "police", "driver"];
 
 export function UsersPage() {
   const qc = useQueryClient();
@@ -68,7 +68,7 @@ export function UsersPage() {
 
   const roleM = useMutation({
     mutationFn: ({ id, role }: { id: string; role: string }) =>
-      patchUser(id, { role }),
+      patchUser(id, { role: role.toLowerCase() }),
     onSuccess: () =>
       void qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
@@ -89,14 +89,15 @@ export function UsersPage() {
           value={u.role}
           disabled={roleM.isPending}
           onChange={(e) => {
-            const role = e.target.value;
-            if (role !== u.role) roleM.mutate({ id: u.id, role });
+            const role = e.target.value.toLowerCase();
+            if (role !== u.role.toLowerCase())
+              roleM.mutate({ id: u.id, role });
           }}
           onClick={(e) => e.stopPropagation()}
         >
           {ROLES.map((r) => (
             <option key={r} value={r}>
-              {r}
+              {r.toUpperCase()}
             </option>
           ))}
         </select>
@@ -209,7 +210,7 @@ function CreateUserDrawer({
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState("DRIVER");
+  const [role, setRole] = useState("driver");
   const [hospitalId, setHospitalId] = useState("");
   const [junctionIds, setJunctionIds] = useState<string[]>([]);
   const [formErr, setFormErr] = useState<string | null>(null);
@@ -219,9 +220,9 @@ function CreateUserDrawer({
       createUser({
         email: email.trim(),
         password,
-        role,
-        ...(role === "HOSPITAL" && hospitalId ? { hospital_id: hospitalId } : {}),
-        ...(role === "POLICE" ? { junction_ids: junctionIds } : {}),
+        role: role.toLowerCase(),
+        ...(role.toLowerCase() === "hospital" && hospitalId ? { hospital_id: hospitalId } : {}),
+        ...(role.toLowerCase() === "police" ? { junction_ids: junctionIds } : {}),
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["admin", "users"] });
@@ -234,7 +235,7 @@ function CreateUserDrawer({
     onClose();
     setEmail("");
     setPassword("");
-    setRole("DRIVER");
+    setRole("driver");
     setHospitalId("");
     setJunctionIds([]);
     setFormErr(null);
@@ -251,11 +252,11 @@ function CreateUserDrawer({
       setFormErr("Password must be at least 8 characters.");
       return;
     }
-    if (role === "HOSPITAL" && !hospitalId) {
+    if (role.toLowerCase() === "hospital" && !hospitalId) {
       setFormErr("Select a hospital for this user.");
       return;
     }
-    if (role === "POLICE" && junctionIds.length === 0) {
+    if (role.toLowerCase() === "police" && junctionIds.length === 0) {
       setFormErr("Assign at least one junction to this officer.");
       return;
     }
@@ -298,12 +299,12 @@ function CreateUserDrawer({
         <SelectField label="Role" value={role} onChange={setRole}>
           {ROLES.map((r) => (
             <option key={r} value={r}>
-              {r}
+              {r.toUpperCase()}
             </option>
           ))}
         </SelectField>
 
-        {role === "HOSPITAL" && (
+        {role.toLowerCase() === "hospital" && (
           <SelectField
             label="Hospital"
             value={hospitalId}
@@ -318,7 +319,7 @@ function CreateUserDrawer({
           </SelectField>
         )}
 
-        {role === "POLICE" && (
+        {role.toLowerCase() === "police" && (
           <div>
             <Txt as="div" className="field-label" style={{ marginBottom: 6 }}>
               Junctions

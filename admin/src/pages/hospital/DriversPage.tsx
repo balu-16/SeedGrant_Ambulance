@@ -15,7 +15,7 @@ import { Loading, InlineError } from "@/pages/shared/bits";
 export function HospitalDriversPage() {
   const { user } = useAuth();
   const { pathname } = useLocation();
-  const item = currentNavItem(pathname, (user?.role ?? "HOSPITAL") as PortalRole);
+  const item = currentNavItem(pathname, (user?.role ?? "hospital") as PortalRole);
 
   const drivers = useQuery({
     queryKey: ["fleet-drivers"],

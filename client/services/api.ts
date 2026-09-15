@@ -27,7 +27,11 @@ export interface BackendUser {
 
 export function apiBaseUrl(): string {
   const raw = (process.env.EXPO_PUBLIC_API_URL ?? "").trim();
-  return raw.replace(/\/+$/, "");
+  let base = raw.replace(/\/+$/, "");
+  // Accept bare origin (https://host) or full prefix (https://host/api/v1);
+  // never double the prefix when users paste the Swagger URL.
+  base = base.replace(/\/api\/v1\/?$/i, "");
+  return base;
 }
 
 /** False when no backend is configured — the app shows its config-required screen. */

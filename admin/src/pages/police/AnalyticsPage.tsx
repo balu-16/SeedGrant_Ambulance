@@ -73,7 +73,7 @@ function BarList({ entries, unit }: { entries: BarEntry[]; unit?: string }) {
 export function PoliceAnalyticsPage() {
   const { user } = useAuth();
   const { pathname } = useLocation();
-  const item = currentNavItem(pathname, (user?.role ?? "POLICE") as PortalRole);
+  const item = currentNavItem(pathname, (user?.role ?? "police") as PortalRole);
 
   const [days, setDays] = useState("7");
 

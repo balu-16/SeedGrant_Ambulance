@@ -56,9 +56,10 @@ export function fmtDuration(
 
 /** Portal role → badge tone. */
 export function roleTone(role: string): BadgeTone {
-  if (role === "ADMIN") return "purple";
-  if (role === "HOSPITAL") return "green";
-  if (role === "POLICE") return "blue";
+  const r = role.trim().toLowerCase();
+  if (r === "admin") return "purple";
+  if (r === "hospital") return "green";
+  if (r === "police") return "blue";
   return "neutral";
 }
 

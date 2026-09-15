@@ -45,7 +45,8 @@ export function RoleRoute({
     // RequireAuth sits above this in the tree; nothing to render mid-redirect.
     return null;
   }
-  if (!roles.includes(user.role)) {
+  const have = user.role.trim().toLowerCase();
+  if (!roles.map((r) => r.trim().toLowerCase()).includes(have)) {
     return <Navigate to={homeFor(user.role)} replace />;
   }
   return children;

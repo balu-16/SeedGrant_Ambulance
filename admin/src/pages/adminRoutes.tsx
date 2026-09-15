@@ -24,21 +24,21 @@ import { UsersPage } from "@/pages/admin/UsersPage";
 export interface AdminRoute {
   path: string;
   element: ReactNode;
-  roles: ["ADMIN"];
+  roles: ["admin"];
 }
 
 const adminRoutes: AdminRoute[] = [
-  { path: "/", element: <DashboardPage />, roles: ["ADMIN"] },
-  { path: "/map", element: <LiveMapPage />, roles: ["ADMIN"] },
-  { path: "/emergencies", element: <EmergenciesPage />, roles: ["ADMIN"] },
-  { path: "/users", element: <UsersPage />, roles: ["ADMIN"] },
-  { path: "/hospitals", element: <HospitalsPage />, roles: ["ADMIN"] },
-  { path: "/junctions", element: <JunctionsPage />, roles: ["ADMIN"] },
-  { path: "/devices", element: <DevicesPage />, roles: ["ADMIN"] },
-  { path: "/fleet", element: <FleetPage />, roles: ["ADMIN"] },
-  { path: "/analytics", element: <AnalyticsPage />, roles: ["ADMIN"] },
-  { path: "/audit", element: <AuditPage />, roles: ["ADMIN"] },
-  { path: "/system", element: <SystemPage />, roles: ["ADMIN"] },
+  { path: "/", element: <DashboardPage />, roles: ["admin"] },
+  { path: "/map", element: <LiveMapPage />, roles: ["admin"] },
+  { path: "/emergencies", element: <EmergenciesPage />, roles: ["admin"] },
+  { path: "/users", element: <UsersPage />, roles: ["admin"] },
+  { path: "/hospitals", element: <HospitalsPage />, roles: ["admin"] },
+  { path: "/junctions", element: <JunctionsPage />, roles: ["admin"] },
+  { path: "/devices", element: <DevicesPage />, roles: ["admin"] },
+  { path: "/fleet", element: <FleetPage />, roles: ["admin"] },
+  { path: "/analytics", element: <AnalyticsPage />, roles: ["admin"] },
+  { path: "/audit", element: <AuditPage />, roles: ["admin"] },
+  { path: "/system", element: <SystemPage />, roles: ["admin"] },
 ];
 
 export default adminRoutes;

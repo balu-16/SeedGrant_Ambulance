@@ -57,9 +57,9 @@ dashboard. Scoping is always enforced server-side; the UI guards are UX only.
    `{ success, data: { access_token, refresh_token, user { id, email, role } } }`.
    Tokens are stored under `localStorage["admin-portal:tokens:v1"]`.
 2. `GET /api/v1/auth/me` (Bearer) re-verifies the account server-side; the
-   returned user (role ∈ `ADMIN | HOSPITAL | POLICE`) drives the nav, the
+   returned user (role ∈ `admin | hospital | police`, lowercase) drives the nav, the
    role chip and the route guards.
-3. `DRIVER` logins are rejected client-side (`ROLE_NOT_ALLOWED`) — the mobile
+3. `driver` logins are rejected client-side (`ROLE_NOT_ALLOWED`) — the mobile
    app is their client.
 4. On any `401`, `src/services/api.ts` runs a **single-flight**
    `POST /auth/refresh` `{ refresh_token }` and retries the original request

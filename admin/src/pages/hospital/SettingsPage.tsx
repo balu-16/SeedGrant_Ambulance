@@ -16,7 +16,7 @@ import { PasswordCard } from "@/pages/shared/PasswordCard";
 export function HospitalSettingsPage() {
   const { user } = useAuth();
   const { pathname } = useLocation();
-  const item = currentNavItem(pathname, (user?.role ?? "HOSPITAL") as PortalRole);
+  const item = currentNavItem(pathname, (user?.role ?? "hospital") as PortalRole);
 
   const hospitals = useQuery({ queryKey: ["hospitals"], queryFn: listHospitals });
 

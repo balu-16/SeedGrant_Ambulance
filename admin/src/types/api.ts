@@ -3,7 +3,15 @@
  * schemas served at /api/v1 (same backend the driver app uses).
  */
 
-export type Role = "ADMIN" | "HOSPITAL" | "POLICE" | "DRIVER";
+export type Role = "admin" | "hospital" | "police" | "driver";
+
+/** Normalize any role string from the backend to lowercase canonical form. */
+export function normalizeRole(r: string): Role {
+  const v = r.trim().toLowerCase();
+  if (v === "admin" || v === "hospital" || v === "police" || v === "driver")
+    return v;
+  return v as Role;
+}
 
 export interface AuthUser {
   id: string;

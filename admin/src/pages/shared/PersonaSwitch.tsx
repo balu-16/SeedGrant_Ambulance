@@ -13,12 +13,12 @@ import { PoliceSettingsPage } from "@/pages/police/SettingsPage";
 
 export function PersonaDashboard() {
   const { user } = useAuth();
-  if (user?.role === "POLICE") return <PoliceDashboardPage />;
+  if (user?.role.trim().toLowerCase() === "police") return <PoliceDashboardPage />;
   return <HospitalDashboardPage />;
 }
 
 export function PersonaSettings() {
   const { user } = useAuth();
-  if (user?.role === "POLICE") return <PoliceSettingsPage />;
+  if (user?.role.trim().toLowerCase() === "police") return <PoliceSettingsPage />;
   return <HospitalSettingsPage />;
 }

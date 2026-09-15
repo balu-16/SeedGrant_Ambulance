@@ -53,7 +53,7 @@ function Correlation({ value }: { value: string }) {
 export function PoliceCommandLogPage() {
   const { user } = useAuth();
   const { pathname } = useLocation();
-  const item = currentNavItem(pathname, (user?.role ?? "POLICE") as PortalRole);
+  const item = currentNavItem(pathname, (user?.role ?? "police") as PortalRole);
 
   const junctionIds = useMemo(() => user?.junction_ids ?? [], [user]);
   const junctions = useQuery({ queryKey: ["junctions"], queryFn: listJunctions });

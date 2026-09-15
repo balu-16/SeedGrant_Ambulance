@@ -36,7 +36,7 @@ const STATUS_OPTIONS = [
 export function HospitalEmergenciesPage() {
   const { user } = useAuth();
   const { pathname } = useLocation();
-  const item = currentNavItem(pathname, (user?.role ?? "HOSPITAL") as PortalRole);
+  const item = currentNavItem(pathname, (user?.role ?? "hospital") as PortalRole);
 
   const [status, setStatus] = useState("");
   const [offset, setOffset] = useState(0);

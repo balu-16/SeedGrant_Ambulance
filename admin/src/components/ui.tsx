@@ -472,9 +472,9 @@ export function Avatar({
 // ---- Header (portal top bar: page title + role chip + initials avatar) ----
 
 const ROLE_CHIP: Record<string, BadgeTone> = {
-  ADMIN: "purple",
-  HOSPITAL: "green",
-  POLICE: "blue",
+  admin: "purple",
+  hospital: "green",
+  police: "blue",
 };
 
 export function Header({
@@ -491,7 +491,7 @@ export function Header({
       <Txt as="h1" className="page-head-title">{title}</Txt>
       <div className="topbar-right">
         {children}
-        <Badge label={user.role} tone={ROLE_CHIP[user.role] ?? "neutral"} />
+        <Badge label={user.role} tone={ROLE_CHIP[user.role.trim().toLowerCase()] ?? "neutral"} />
         <Avatar name={user.name ?? user.email} />
       </div>
     </header>

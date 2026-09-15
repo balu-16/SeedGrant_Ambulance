@@ -20,7 +20,7 @@ const LIVE_REFRESH = 10_000;
 export function PoliceDashboardPage() {
   const { user } = useAuth();
   const { pathname } = useLocation();
-  const item = currentNavItem(pathname, (user?.role ?? "POLICE") as PortalRole);
+  const item = currentNavItem(pathname, (user?.role ?? "police") as PortalRole);
 
   const junctionIds = useMemo(() => user?.junction_ids ?? [], [user]);
 

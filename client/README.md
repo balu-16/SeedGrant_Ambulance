@@ -1,6 +1,6 @@
 # Ambulance Driver (`client/` — Expo app in the SeedGrant monorepo)
 
-An Android-first Expo SDK 57 frontend for the ambulance component of the Edge-AI Adaptive Traffic Management System. Seven screens reproduce the supplied `../reference/` designs. The app runs fully offline as a demo, and links to the FastAPI backend when `EXPO_PUBLIC_API_URL` is set (real login, GPS streaming, history, push notifications).
+An Android-first Expo SDK 57 frontend for the ambulance component of the Edge-AI Adaptive Traffic Management System. Seven screens reproduce the supplied `../reference/` designs. The app requires a backend link for real login — set `EXPO_PUBLIC_API_URL` to the bare backend origin (e.g. `https://seedgrant-backend.onrender.com`, **no** `/api/v1` suffix; the client appends it). Without it the app shows an "App not configured" screen and login refuses.
 
 ## Run
 
@@ -20,7 +20,7 @@ Scan the Metro QR code with a compatible Android Expo Go installation. With an A
 - Email alternative: `driver001@example.com`
 - Password: `123456`
 
-These are public mock credentials used when the backend is unreachable or when signing in with the demo driver ID. Set `EXPO_PUBLIC_API_URL` in `.env` to link the app to the backend; with the API enabled, real accounts authenticate first and the demo credentials still work as a fallback. Profile edits do not change the login credentials.
+These are public mock credentials used for local UI tests only. Set `EXPO_PUBLIC_API_URL` in `.env` (bare origin, no `/api/v1` suffix) or via the EAS dashboard (preview/production) to link the app to the backend; with the API enabled, real driver accounts authenticate against the backend and non-driver roles are rejected. EAS `env` in `eas.json` overrides `.env` at build time — rebuild or EAS Update after changing dashboard vars. Profile edits do not change the login credentials.
 
 ## Project structure
 

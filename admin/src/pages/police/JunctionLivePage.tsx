@@ -54,7 +54,7 @@ const OVERRIDES: { action: OverrideAction; title: string; tone: "primary" | "qui
 export function PoliceJunctionLivePage() {
   const { user } = useAuth();
   const { pathname } = useLocation();
-  const item = currentNavItem(pathname, (user?.role ?? "POLICE") as PortalRole);
+  const item = currentNavItem(pathname, (user?.role ?? "police") as PortalRole);
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
 

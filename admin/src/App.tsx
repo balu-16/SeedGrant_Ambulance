@@ -36,7 +36,10 @@ for (const entry of [...adminRoutes, ...PERSONA_ROUTES]) {
 /** Renders the manifest entry matching the signed-in role for a shared path. */
 function RoleSwitch({ entries }: { entries: RouteEntry[] }) {
   const { user } = useAuth();
-  const match = entries.find((e) => e.roles.includes(user?.role ?? ""));
+  const have = (user?.role ?? "").trim().toLowerCase();
+  const match = entries.find((e) =>
+    e.roles.map((r) => r.trim().toLowerCase()).includes(have),
+  );
   if (!match) return <Navigate to="/" replace />;
   return <>{match.element}</>;
 }

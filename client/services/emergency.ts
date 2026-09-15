@@ -218,8 +218,12 @@ export async function backendPatient(
   });
 }
 
-/** Backend terminal statuses (server/app/core/consts.py). */
+/** Backend terminal statuses (server/app/core/consts.py) — compare uppercase. */
 const TERMINAL_STATUSES = new Set(["COMPLETED", "CANCELLED", "TIMED_OUT"]);
+
+function normStatus(s: string | null | undefined): string {
+  return (s ?? "").trim().toUpperCase();
+}
 
 /**
  * Map a backend history row onto the local EmergencySession shape.
@@ -230,7 +234,7 @@ const TERMINAL_STATUSES = new Set(["COMPLETED", "CANCELLED", "TIMED_OUT"]);
 export function mapHistoryItem(item: BackendHistoryItem): EmergencySession {
   const startedAt = Date.parse(item.started_at) || Date.now();
   const parsedEndedAt = item.ended_at ? Date.parse(item.ended_at) : NaN;
-  const terminal = TERMINAL_STATUSES.has(item.status);
+  const terminal = TERMINAL_STATUSES.has(normStatus(item.status));
   const hasFix =
     typeof item.last_latitude === "number" &&
     typeof item.last_longitude === "number" &&
@@ -248,7 +252,7 @@ export function mapHistoryItem(item: BackendHistoryItem): EmergencySession {
       if (e.type === "PRIORITY_REQUEST") {
         events.push({
           id: e.id,
-          kind: e.status === "ACKNOWLEDGED" ? "granted" : "requested",
+          kind: normStatus(e.status) === "ACKNOWLEDGED" ? "granted" : "requested",
           timestamp,
           approach: e.approach ?? undefined,
         });
@@ -271,9 +275,9 @@ export function mapHistoryItem(item: BackendHistoryItem): EmergencySession {
         ? Math.round((item.distance_m / 1000) * 100) / 100
         : 0,
     status:
-      item.status === "COMPLETED"
+      normStatus(item.status) === "COMPLETED"
         ? "completed"
-        : item.status === "CANCELLED" || item.status === "TIMED_OUT"
+        : normStatus(item.status) === "CANCELLED" || normStatus(item.status) === "TIMED_OUT"
           ? "cancelled"
           : "active",
     junctionsCrossed:

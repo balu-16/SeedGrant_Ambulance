@@ -15,7 +15,7 @@ export function Shell() {
   const location = useLocation();
   if (!user) return null; // RequireAuth guarantees a user here.
 
-  const role = user.role as PortalRole;
+  const role = user.role.trim().toLowerCase() as PortalRole;
   const items = navFor(role);
   const current = currentNavItem(location.pathname, role);
 

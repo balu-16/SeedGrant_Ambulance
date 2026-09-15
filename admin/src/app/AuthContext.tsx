@@ -68,7 +68,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const login = useCallback(
     async (email: string, password: string): Promise<AuthUser> => {
       const res = await apiLogin(email.trim(), password);
-      if (res.user.role === "DRIVER") {
+      if (res.user.role.toLowerCase() === "driver") {
         // Drivers belong to the Expo app, not this portal.
         clearTokens();
         throw new ApiError(
@@ -90,6 +90,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
           "Signed in, but the account profile could not be loaded — try again.",
           502,
           "PROFILE_UNAVAILABLE",
+        );
+      }
+      if (me.role.toLowerCase() === "driver") {
+        clearTokens();
+        throw new ApiError(
+          "Driver accounts use the mobile app, not this portal.",
+          403,
+          "ROLE_NOT_ALLOWED",
         );
       }
       setUser(me);
