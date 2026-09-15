@@ -6,7 +6,7 @@ fresh `alembic upgrade head` produces the same schema. Idempotent guards keep
 it safe to run on the live DB.
 """
 # ruff: noqa: E402, I001 — alembic revision vars precede imports by convention
-revision = "0009_lowercase_roles_uuid_defaults"
+revision = "0009_lc_roles_uuid_defaults"
 down_revision = "0008_last_login_prefs"
 branch_labels = None
 depends_on = None
