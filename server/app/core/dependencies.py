@@ -42,9 +42,18 @@ async def get_current_user(
     return user
 
 
+def _norm_role(role) -> str:
+    """Lowercase role for comparison — DB stores lowercase, old rows/tests may be UPPER."""
+    return str(role or "").lower()
+
+
+def has_role(user, *roles: str) -> bool:
+    return _norm_role(getattr(user, "role", None)) in {r.lower() for r in roles}
+
+
 def require_role(*roles: str):
     async def _dep(user=Depends(get_current_user)):
-        if user.role not in roles:
+        if not has_role(user, *roles):
             raise Forbidden(f"Requires role {roles}")
         return user
 
@@ -69,7 +78,7 @@ def hospital_scope(user) -> uuid.UUID | None:
 
 async def police_junction_ids(db: AsyncSession, user) -> list[uuid.UUID]:
     """Junction ids assigned to a POLICE user (empty = sees/controls nothing)."""
-    if getattr(user, "role", None) != "POLICE":
+    if _norm_role(getattr(user, "role", None)) != "police":
         return []
     rows = (
         await db.execute(

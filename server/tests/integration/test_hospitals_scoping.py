@@ -123,7 +123,7 @@ async def test_hospitalless_hospital_user_sees_nothing(client, admin, db_factory
     """A HOSPITAL user with no hospital must see zero rows everywhere — the old
     `hospital_id == user.hospital_id` filter compiled to IS NULL and leaked
     every unassigned ambulance (and allowed PATCHing them)."""
-    orphan = await make_user(db_factory, "orphan.owner@example.com", role="HOSPITAL")
+    orphan = await make_user(db_factory, "orphan.owner@example.com", role="hospital")
     ho = await login_headers(client, orphan.email)
 
     # an ambulance with NO hospital exists — exactly what the old filter leaked

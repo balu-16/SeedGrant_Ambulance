@@ -24,8 +24,8 @@ async def _register_push(client, headers, player_id: str):
 
 
 async def test_push_token_rebind_by_second_user_is_409(client, db_factory):
-    u1 = await make_user(db_factory, "driver.one@example.com", role="DRIVER")
-    u2 = await make_user(db_factory, "driver.two@example.com", role="DRIVER")
+    u1 = await make_user(db_factory, "driver.one@example.com", role="driver")
+    u2 = await make_user(db_factory, "driver.two@example.com", role="driver")
     h1 = await login_headers(client, u1.email)
     h2 = await login_headers(client, u2.email)
 
@@ -62,7 +62,7 @@ async def test_vision_endpoints_reject_anonymous(client):
 
 
 async def test_detections_listing_is_admin_only(client, db_factory):
-    driver = await make_user(db_factory, "just.a.driver@example.com", role="DRIVER")
+    driver = await make_user(db_factory, "just.a.driver@example.com", role="driver")
     headers = await login_headers(client, driver.email)
     r = await client.get("/api/v1/vision/detections", headers=headers)
     assert r.status_code == 403  # rows span all junctions → ADMIN only

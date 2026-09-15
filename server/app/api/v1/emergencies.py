@@ -46,10 +46,10 @@ async def start(body: StartEmergencyIn, db=Depends(get_db), user=Depends(get_cur
     amb = await get_ambulance(db, body.ambulance_id)
     if not amb:
         raise NotFound("Ambulance not found")
-    if user.role == "ADMIN":
+    if str(user.role).lower() == "admin":
         pass  # ops override: admin may start on any ambulance
-    elif user.role != "DRIVER" or amb.driver_id != user.id:
-        # PORTAL roles cannot start emergencies; a DRIVER only on their own
+    elif str(user.role).lower() != "driver" or amb.driver_id != user.id:
+        # PORTAL roles cannot start emergencies; a driver only on their own
         # assigned ambulance (an unassigned ambulance matches no driver)
         raise Forbidden("Only the assigned driver can start an emergency")
     s = await emg.start_session(db, amb, user, hospital=body.hospital or None)

@@ -14,8 +14,8 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(
-        String(16), default="DRIVER", index=True
-    )  # ADMIN | HOSPITAL | POLICE | DRIVER
+        String(16), default="driver", index=True
+    )  # admin | hospital | police | driver (lowercase, portal_role_lc ENUM in Postgres)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     refresh_version: Mapped[int] = mapped_column(
         default=0

@@ -24,10 +24,10 @@ pytestmark = pytest.mark.asyncio
 async def test_register_is_driver_only_role_in_payload_ignored(client):
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "new.driver@example.com", "password": PASSWORD, "role": "ADMIN"},
+        json={"email": "new.driver@example.com", "password": PASSWORD, "role": "admin"},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["data"]["role"] == "DRIVER"
+    assert r.json()["data"]["role"] == "driver"
 
 
 async def test_register_duplicate_email_conflict_409(client):
@@ -67,7 +67,7 @@ async def test_login_tokens_work_on_me_and_anonymous_is_401(client):
     )
     assert me.status_code == 200
     assert me.json()["data"]["email"] == "me@example.com"
-    assert me.json()["data"]["role"] == "DRIVER"
+    assert me.json()["data"]["role"] == "driver"
     # no token / bad token → 401
     assert (await client.get("/api/v1/auth/me")).status_code == 401
     bad = await client.get("/api/v1/auth/me", headers={"Authorization": "Bearer nope"})
@@ -102,7 +102,7 @@ async def test_refresh_token_is_single_use_rotation(client):
 
 
 async def test_driver_cannot_hit_admin_endpoint_403(client, db_factory):
-    u = await make_user(db_factory, "plain.driver@example.com", role="DRIVER")
+    u = await make_user(db_factory, "plain.driver@example.com", role="driver")
     headers = await login_headers(client, u.email)
     r = await client.post(
         "/api/v1/admin/devices/register",

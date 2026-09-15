@@ -122,7 +122,7 @@ async def client(db_factory):
 # ---- user helpers -----------------------------------------------------------
 
 
-async def make_user(db_factory, email: str, role: str = "DRIVER") -> User:
+async def make_user(db_factory, email: str, role: str = "driver") -> User:
     """Insert a user directly (public register is DRIVER-only; admins need this)."""
     async with db_factory() as s:
         u = User(email=email, password_hash=hash_password(PASSWORD), role=role)
@@ -145,14 +145,14 @@ async def login_headers(client, email: str) -> dict[str, str]:
 @pytest.fixture
 async def admin(client, db_factory):
     """ADMIN user + auth headers."""
-    u = await make_user(db_factory, "admin@example.com", role="ADMIN")
+    u = await make_user(db_factory, "admin@example.com", role="admin")
     return {"user": u, "headers": await login_headers(client, u.email)}
 
 
 @pytest.fixture
 async def driver(client, db_factory):
     """DRIVER user + auth headers."""
-    u = await make_user(db_factory, "driver@example.com", role="DRIVER")
+    u = await make_user(db_factory, "driver@example.com", role="driver")
     return {"user": u, "headers": await login_headers(client, u.email)}
 
 
@@ -285,9 +285,9 @@ async def make_hospital_fleet(client, admin, db_factory, tag: str) -> dict:
     """Scoping cell: hospital + HOSPITAL user + DRIVER + ambulance + ACTIVE session."""
     hospital = await make_hospital(client, admin, f"Hospital {tag}")
     user = await make_portal_user(
-        client, admin, f"owner.{tag.lower()}@example.com", "HOSPITAL", hospital_id=hospital["id"]
+        client, admin, f"owner.{tag.lower()}@example.com", "hospital", hospital_id=hospital["id"]
     )
-    driver = await make_user(db_factory, f"driver.{tag.lower()}@example.com", role="DRIVER")
+    driver = await make_user(db_factory, f"driver.{tag.lower()}@example.com", role="driver")
     r = await client.post(
         "/api/v1/ambulances",
         json={

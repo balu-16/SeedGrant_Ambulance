@@ -17,7 +17,7 @@ def _check_payload(v: dict) -> dict:
 class RegisterIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=72)
-    role: str = "DRIVER"  # ignored by /auth/register: public registration is DRIVER-only
+    role: str = "driver"  # ignored by /auth/register: public registration is driver-only
 
 
 class LoginIn(BaseModel):
@@ -50,9 +50,10 @@ class AmbulanceAssignIn(BaseModel):
     vehicle_no: str | None = Field(default=None, min_length=1, max_length=32)
 
 
-# Portal roles a ADMIN may assign (public register stays DRIVER-only).
-PORTAL_ROLES = ("ADMIN", "HOSPITAL", "POLICE", "DRIVER")
-_ROLE_PATTERN = "^(ADMIN|HOSPITAL|POLICE|DRIVER)$"
+# Portal roles a ADMIN may assign (public register stays driver-only).
+# Stored lowercase in DB (portal_role_lc ENUM); validation accepts any case.
+PORTAL_ROLES = ("admin", "hospital", "police", "driver")
+_ROLE_PATTERN = "^([Aa][Dd][Mm][Ii][Nn]|[Hh][Oo][Ss][Pp][Ii][Tt][Aa][Ll]|[Pp][Oo][Ll][Ii][Cc][Ee]|[Dd][Rr][Ii][Vv][Ee][Rr])$"
 
 
 class AdminUserCreateIn(BaseModel):
@@ -62,12 +63,22 @@ class AdminUserCreateIn(BaseModel):
     hospital_id: uuid.UUID | None = None  # required-ish for HOSPITAL users
     junction_ids: list[uuid.UUID] = []  # POLICE only
 
+    @field_validator("role")
+    @classmethod
+    def _lower_role(cls, v: str) -> str:
+        return v.lower()
+
 
 class AdminUserPatchIn(BaseModel):
     is_active: bool | None = None
     role: str | None = Field(default=None, pattern=_ROLE_PATTERN)
     hospital_id: uuid.UUID | None = None  # present-and-null clears the assignment
     junction_ids: list[uuid.UUID] | None = None  # present → replace (POLICE only)
+
+    @field_validator("role")
+    @classmethod
+    def _lower_role(cls, v: str | None) -> str | None:
+        return v.lower() if v is not None else None
 
 
 class AdminPasswordResetIn(BaseModel):

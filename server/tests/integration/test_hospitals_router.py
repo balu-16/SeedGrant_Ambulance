@@ -14,10 +14,10 @@ PICKER_FIELDS = {"id", "name", "latitude", "longitude"}
 async def test_hospital_picker_visible_to_every_role(client, admin, driver, junction):
     h = await make_hospital(client, admin, "Picker General")
     hosp_user = await make_portal_user(
-        client, admin, "picker.owner@example.com", "HOSPITAL", hospital_id=h["id"]
+        client, admin, "picker.owner@example.com", "hospital", hospital_id=h["id"]
     )
     police_user = await make_portal_user(
-        client, admin, "picker.police@example.com", "POLICE", junction_ids=[junction["id"]]
+        client, admin, "picker.police@example.com", "police", junction_ids=[junction["id"]]
     )
     hosp_h = await login_headers(client, hosp_user["email"])
     police_h = await login_headers(client, police_user["email"])

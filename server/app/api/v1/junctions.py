@@ -186,7 +186,7 @@ async def override_junction(
     the open priority silently, REISSUE re-arms the latest expired priority.
     Every call requires a reason and is audit-logged with the officer identity.
     """
-    if user.role == "POLICE":
+    if str(user.role).lower() == "police":
         if jid not in await police_junction_ids(db, user):
             raise Forbidden("Junction not assigned to you")
     j = (await db.execute(select(Junction).where(Junction.id == jid))).scalar_one_or_none()

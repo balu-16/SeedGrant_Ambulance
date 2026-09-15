@@ -23,7 +23,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _officer_for(client, admin, db_factory, email: str, junction_ids: list[str]) -> dict:
-    u = await make_portal_user(client, admin, email, "POLICE", junction_ids=junction_ids)
+    u = await make_portal_user(client, admin, email, "police", junction_ids=junction_ids)
     return {"id": u["id"], "headers": await login_headers(client, email)}
 
 
@@ -310,7 +310,7 @@ async def test_override_rejects_bad_body_and_other_roles(client, admin, db_facto
     )
     assert r.status_code == 422
     # DRIVER has no override rights at all
-    d = await make_user(db_factory, "no.override@example.com", role="DRIVER")
+    d = await make_user(db_factory, "no.override@example.com", role="driver")
     dh = await login_headers(client, d.email)
     assert (
         await _override(client, dh, junction["id"], "HOLD", reason="driver tried it")

@@ -110,7 +110,7 @@ async def telemetry_history(
     user=Depends(require_any("ADMIN", "POLICE")),
 ):
     """Telemetry history for a junction — ADMIN anywhere, POLICE on assigned junctions."""
-    if user.role == "POLICE" and junction_id not in await police_junction_ids(db, user):
+    if str(user.role).lower() == "police" and junction_id not in await police_junction_ids(db, user):
         raise Forbidden("Junction not assigned to you")
     limit = max(1, min(limit, 200))
     offset = max(0, offset)

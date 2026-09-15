@@ -70,7 +70,7 @@ def apply_timeouts(
 
 
 def ensure_owner(session: EmergencySession, user) -> None:
-    if user.role == "ADMIN":
+    if str(user.role).lower() == "admin":
         return
     if session.driver_id != user.id:
         raise Forbidden("Not your emergency session")

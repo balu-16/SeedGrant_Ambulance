@@ -63,7 +63,7 @@ async def seed():
         ).scalar_one_or_none()
         if not driver:
             driver = User(
-                email="driver@demo.io", password_hash=hash_password("Demo123!"), role="DRIVER"
+                email="driver@demo.io", password_hash=hash_password("Demo123!"), role="driver"
             )
             db.add(driver)
             await db.flush()
@@ -72,7 +72,7 @@ async def seed():
         ).scalar_one_or_none()
         if not admin:
             admin = User(
-                email="admin@demo.io", password_hash=hash_password("Admin123!"), role="ADMIN"
+                email="admin@demo.io", password_hash=hash_password("Admin123!"), role="admin"
             )
             db.add(admin)
             await db.flush()

@@ -40,7 +40,7 @@ async def update_my_hospital(
     user=Depends(require_any("ADMIN", "HOSPITAL")),
 ):
     """Hospital self-service profile edit (ADMIN may edit its own anchor row)."""
-    if user.role == "HOSPITAL":
+    if str(user.role).lower() == "hospital":
         scope = hospital_scope(user)
         if scope is None:
             raise Forbidden("No hospital assigned to your account")

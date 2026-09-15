@@ -33,12 +33,12 @@ _DUMMY_HASH = hash_password("InvalidCredentialsTiming1!")
 
 @router.post("/register")
 async def register(body: RegisterIn, db=Depends(get_db)):
-    # public registration is DRIVER-only; admins are created via seed (body.role is ignored)
+    # public registration is driver-only; admins are created via seed (body.role is ignored)
     try:
         pw_hash = hash_password(body.password)
     except ValueError as e:
         raise AppError(str(e), code="VALIDATION_ERROR", status_code=422) from None
-    u = User(email=body.email.lower(), password_hash=pw_hash, role="DRIVER")
+    u = User(email=body.email.lower(), password_hash=pw_hash, role="driver")
     db.add(u)
     try:
         await db.commit()
@@ -135,7 +135,7 @@ async def change_password(
 async def me(user=Depends(get_current_user), db=Depends(get_db)):
     # Portal scope: hospital owners bind to one hospital, police to junctions.
     junction_ids: list[str] = []
-    if user.role == "POLICE":
+    if str(user.role).lower() == "police":
         rows = (
             await db.execute(
                 select(PoliceAssignment.junction_id).where(

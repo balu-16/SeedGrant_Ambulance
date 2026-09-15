@@ -43,7 +43,7 @@ async def create_amb(
     body: AmbulanceIn, db=Depends(get_db), user=Depends(require_any("ADMIN", "HOSPITAL"))
 ):
     hospital_id = body.hospital_id
-    if user.role == "HOSPITAL":
+    if str(user.role).lower() == "hospital":
         # hospital owners can only register ambulances for their own hospital
         if hospital_id and hospital_id != user.hospital_id:
             raise Forbidden("Not your hospital")
@@ -89,7 +89,7 @@ async def create_amb(
 async def list_ambulances(db=Depends(get_db), user=Depends(require_any("ADMIN", "HOSPITAL"))):
     """Fleet list — ADMIN sees all, HOSPITAL only its own hospital's ambulances."""
     q = select(Ambulance).order_by(Ambulance.created_at.desc())
-    if user.role == "HOSPITAL":
+    if str(user.role).lower() == "hospital":
         scope = hospital_scope(user)
         if scope is None:  # unassigned HOSPITAL user: see nothing, not IS NULL
             return {"success": True, "data": []}
@@ -151,7 +151,7 @@ async def update_ambulance(
     a = await get_ambulance(db, aid)
     if not a:
         raise NotFound("Ambulance not found")
-    if user.role == "HOSPITAL":
+    if str(user.role).lower() == "hospital":
         scope = hospital_scope(user)
         # an unassigned HOSPITAL user owns nothing (None == None would pass!)
         if scope is None or a.hospital_id != scope:

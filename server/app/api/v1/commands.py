@@ -127,7 +127,7 @@ async def admin_list(
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     q = select(EmergencyCommand).order_by(EmergencyCommand.created_at.desc())
-    if user.role == "POLICE":
+    if str(user.role).lower() == "police":
         q = q.where(EmergencyCommand.junction_id.in_(await police_junction_ids(db, user)))
     if junction_id is not None:
         q = q.where(EmergencyCommand.junction_id == junction_id)

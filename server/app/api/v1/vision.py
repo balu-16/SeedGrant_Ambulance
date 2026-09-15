@@ -154,7 +154,7 @@ async def list_detections(
     rejected — rows span junctions.
     """
     q = select(Detection).order_by(desc(Detection.detected_at))
-    if user.role == "POLICE":
+    if str(user.role).lower() == "police":
         pids = await police_junction_ids(db, user)
         if junction_id and junction_id not in pids:
             raise Forbidden("Junction not assigned to you")

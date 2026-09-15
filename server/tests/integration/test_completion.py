@@ -91,7 +91,7 @@ async def test_history_returns_events_distance_and_junctions(
 
 
 async def test_login_sets_last_login_visible_to_admin(client, admin, db_factory):
-    u = await make_user(db_factory, "late@example.com", role="DRIVER")
+    u = await make_user(db_factory, "late@example.com", role="driver")
     assert u.last_login_at is None
     await login_headers(client, u.email)
     async with db_factory() as s:
@@ -198,7 +198,7 @@ async def test_patch_junction_and_deactivate_releases_commands(
 
 async def test_patch_hospitals_mine(client, admin, db_factory):
     h = await _create_hospital(client, admin, "Self Service Hospital")
-    u = await make_user(db_factory, "hosuser@example.com", role="HOSPITAL")
+    u = await make_user(db_factory, "hosuser@example.com", role="hospital")
     async with db_factory() as s:
         row = await s.get(User, u.id)
         row.hospital_id = uuid.UUID(h["id"])
@@ -213,7 +213,7 @@ async def test_patch_hospitals_mine(client, admin, db_factory):
     assert r.status_code == 200, r.text
 
     # an unassigned HOSPITAL user owns nothing
-    u2 = await make_user(db_factory, "hosnone@example.com", role="HOSPITAL")
+    u2 = await make_user(db_factory, "hosnone@example.com", role="hospital")
     headers2 = await login_headers(client, u2.email)
     r = await client.patch(
         "/api/v1/hospitals/mine", json={"name": "X"}, headers=headers2

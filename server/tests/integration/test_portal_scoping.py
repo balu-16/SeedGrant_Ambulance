@@ -105,7 +105,7 @@ async def _two_junctions_with_commands(client, admin, db_factory):
 
 
 async def _officer(client, admin, email: str, junction_ids: list[str]) -> dict:
-    u = await make_portal_user(client, admin, email, "POLICE", junction_ids=junction_ids)
+    u = await make_portal_user(client, admin, email, "police", junction_ids=junction_ids)
     return {"id": u["id"], "headers": await login_headers(client, email)}
 
 
@@ -204,7 +204,7 @@ async def test_vision_detections_police_scoped(client, admin, db_factory):
 
 async def test_admin_live_police_scoped_to_own_junctions(client, admin, db_factory, junction):
     # a real driver session with an open PRIORITY_REQUEST at `junction`
-    d = await make_user(db_factory, "live.driver@example.com", role="DRIVER")
+    d = await make_user(db_factory, "live.driver@example.com", role="driver")
     amb = (
         await client.post(
             "/api/v1/ambulances",

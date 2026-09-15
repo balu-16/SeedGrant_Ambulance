@@ -8,7 +8,7 @@ from app.services import emergency_service as emg
 
 
 class FakeUser:
-    role = "DRIVER"
+    role = "driver"
     id = "u1"
 
 

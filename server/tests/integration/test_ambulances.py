@@ -81,8 +81,8 @@ async def test_emergency_start_authz_matrix(client, admin, db_factory, driver, a
 
     # PORTAL roles can never start emergencies
     portal_roles = (
-        ("POLICE", "start.cop@example.com"),
-        ("HOSPITAL", "start.owner@example.com"),
+        ("police", "start.cop@example.com"),
+        ("hospital", "start.owner@example.com"),
     )
     for role, email in portal_roles:
         u = await make_user(db_factory, email, role=role)
@@ -94,7 +94,7 @@ async def test_emergency_start_authz_matrix(client, admin, db_factory, driver, a
         assert r.status_code == 403, (role, r.text)
 
     # a DRIVER cannot start on someone else's ambulance
-    other = await make_user(db_factory, "start.other@example.com", role="DRIVER")
+    other = await make_user(db_factory, "start.other@example.com", role="driver")
     r = await client.post(
         "/api/v1/emergencies/start",
         json={"ambulance_id": sid},
