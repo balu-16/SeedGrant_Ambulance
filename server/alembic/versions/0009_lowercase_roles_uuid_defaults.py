@@ -49,11 +49,20 @@ def upgrade() -> None:
         )
     op.execute("ALTER TABLE users ALTER COLUMN is_active SET DEFAULT true")
     op.execute("ALTER TABLE users ALTER COLUMN created_at SET DEFAULT now()")
-    op.execute("UPDATE users SET role = lower(role) WHERE role IS NOT NULL")
-    op.execute("ALTER TABLE users ALTER COLUMN role DROP DEFAULT")
+    # Live DB already has portal_role_lc (applied out-of-band); fresh DBs have
+    # VARCHAR. lower() has no ENUM overload, so cast to text first, and skip
+    # the TYPE conversion entirely when the column is already the ENUM.
     op.execute(
+        "DO $$ DECLARE cur_type text; BEGIN "
+        "SELECT udt_name INTO cur_type FROM information_schema.columns "
+        "WHERE table_schema='public' AND table_name='users' AND column_name='role'; "
+        "IF cur_type IS DISTINCT FROM 'portal_role_lc' THEN "
+        "UPDATE users SET role = lower(role::text) WHERE role IS NOT NULL; "
+        "ALTER TABLE users ALTER COLUMN role DROP DEFAULT; "
         "ALTER TABLE users ALTER COLUMN role TYPE portal_role_lc "
-        "USING lower(role)::portal_role_lc"
+        "USING lower(role::text)::portal_role_lc; "
+        "END IF; "
+        "END $$"
     )
     op.execute(
         "ALTER TABLE users ALTER COLUMN role SET DEFAULT 'driver'::portal_role_lc"
