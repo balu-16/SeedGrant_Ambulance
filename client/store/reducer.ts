@@ -12,10 +12,12 @@ export type Action =
   | { type: "hydrate"; state: AppState }
   | { type: "onboard" }
   | { type: "login"; auth: MockSession }
+  | { type: "linkBackend"; sessionId: string }
   | {
       type: "start";
       now: number;
       seed?: { latitude: number; longitude: number };
+      backendSessionId?: string;
     }
   | { type: "sessionEvent"; event: PriorityEvent }
   | {
@@ -26,19 +28,27 @@ export type Action =
       accuracy?: number | null;
       speed?: number | null;
     }
-  | { type: "stop"; now: number }
+  | {
+      type: "stop";
+      now: number;
+      status?: "completed" | "cancelled" | "timed_out";
+    }
   | { type: "logout"; now: number }
   | { type: "driver"; patch: Partial<Omit<Driver, "id">> }
   | { type: "ambulance"; patch: Partial<Omit<Ambulance, "id">> }
   | { type: "settings"; patch: Partial<Settings> };
-function stop(state: AppState, now: number): AppState {
+function stop(
+  state: AppState,
+  now: number,
+  status: "completed" | "cancelled" | "timed_out" = "completed",
+): AppState {
   if (!state.active) return state;
   const s = state.active;
   const release = s.priority === "requested" || s.priority === "granted";
   const junctionName = s.location.junction.name;
   const completed: EmergencySession = {
     ...s,
-    status: "completed",
+    status,
     endedAt: now,
     priority: "released",
     events: [
@@ -83,6 +93,13 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, onboardingComplete: true };
     case "login":
       return { ...state, auth: action.auth, onboardingComplete: true };
+    case "linkBackend":
+      return state.active
+        ? {
+            ...state,
+            active: { ...state.active, backendSessionId: action.sessionId },
+          }
+        : state;
     case "start":
       return !state.auth || state.active
         ? state
@@ -90,6 +107,9 @@ export function reducer(state: AppState, action: Action): AppState {
             ...state,
             active: {
               id: `emergency-${action.now}`,
+              ...(action.backendSessionId
+                ? { backendSessionId: action.backendSessionId }
+                : {}),
               startedAt: action.now,
               hospital: state.ambulance.hospital,
               distanceKm: 0,
@@ -168,7 +188,7 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "stop":
-      return stop(state, action.now);
+      return stop(state, action.now, action.status);
     case "logout":
       return { ...stop(state, action.now), auth: null };
     case "driver":

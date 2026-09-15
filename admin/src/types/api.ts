@@ -10,7 +10,7 @@ export function normalizeRole(r: string): Role {
   const v = r.trim().toLowerCase();
   if (v === "admin" || v === "hospital" || v === "police" || v === "driver")
     return v;
-  return v as Role;
+  throw new Error(`Unknown role from backend: ${r}`);
 }
 
 export interface AuthUser {

@@ -81,7 +81,10 @@ export function PoliceJunctionLivePage() {
   });
   const detections = useQuery({
     queryKey: ["detections", junctionId],
-    queryFn: () => listDetections({ junction_id: junctionId, limit: 20 }),
+    queryFn: async () => {
+      const res = await listDetections({ junction_id: junctionId, limit: 20 });
+      return Array.isArray(res) ? res : res.items;
+    },
     enabled: junctionId !== "",
     refetchInterval: LIVE_REFRESH,
   });

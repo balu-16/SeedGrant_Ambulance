@@ -38,7 +38,7 @@ async def test_telemetry_history_police_scoped(client, admin, junction):
     )
     assert r.status_code == 200, r.text
     body = r.json()["data"]
-    assert set(body) == {"items", "limit", "offset"}  # paged shape the portal must read
+    assert {"items", "limit", "offset", "total"} <= set(body)  # paged shape the portal must read
     ra = await client.get(
         "/api/v1/telemetry", params={"junction_id": junction["id"]}, headers=admin["headers"]
     )
@@ -179,7 +179,8 @@ async def test_vision_detections_police_scoped(client, admin, db_factory):
     officer = await _officer(client, admin, "vision.cop@example.com", [j1["id"]])
     r = await client.get("/api/v1/vision/detections", headers=officer["headers"])
     assert r.status_code == 200, r.text
-    rows = r.json()["data"]
+    _data = r.json()["data"]
+    rows = _data["items"] if isinstance(_data, dict) else _data
     assert len(rows) == 1
     assert rows[0]["junction_id"] == j1["id"]
 
@@ -196,10 +197,14 @@ async def test_vision_detections_police_scoped(client, admin, db_factory):
         params={"junction_id": j1["id"]},
         headers=officer["headers"],
     )
-    assert r.status_code == 200 and len(r.json()["data"]) == 1
+    _d1 = r.json()["data"]
+    _rows1 = _d1["items"] if isinstance(_d1, dict) else _d1
+    assert r.status_code == 200 and len(_rows1) == 1
     # ADMIN still sees everything
     ra = await client.get("/api/v1/vision/detections", headers=admin["headers"])
-    assert len(ra.json()["data"]) == 2
+    _da = ra.json()["data"]
+    _rowsa = _da["items"] if isinstance(_da, dict) else _da
+    assert len(_rowsa) == 2
 
 
 async def test_admin_live_police_scoped_to_own_junctions(client, admin, db_factory, junction):

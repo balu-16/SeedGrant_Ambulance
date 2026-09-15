@@ -82,15 +82,28 @@ async def start_session(db, ambulance, user, hospital: str | None = None) -> Eme
         apply_timeouts(existing)
         if existing.status in ACTIVE_SESSION_STATUSES:
             raise Conflict("Ambulance already has an active emergency session")
+    # Effective driver: an ADMIN starting on someone else's ambulance must not
+    # orphan ownership — attribute the session to the assigned driver so the
+    # real driver can stop/heartbeat/patient-update it.
+    from uuid import UUID as _UUID
+
+    effective_driver_id = user.id
+    if str(getattr(user, "role", "")).lower() == "admin" and getattr(ambulance, "driver_id", None):
+        effective_driver_id = ambulance.driver_id
     # one active session per driver, even across different ambulances
-    driver_active = await active_session_for_driver(db, user.id)
+    driver_lookup = (
+        effective_driver_id
+        if isinstance(effective_driver_id, _UUID)
+        else user.id
+    )
+    driver_active = await active_session_for_driver(db, driver_lookup)
     if driver_active:
         apply_timeouts(driver_active)
         if driver_active.status in ACTIVE_SESSION_STATUSES:
             raise Conflict("Driver already has an active emergency session")
     s = EmergencySession(
         ambulance_id=ambulance.id,
-        driver_id=user.id,
+        driver_id=driver_lookup,
         status="ACTIVE",
         hospital=hospital or None,
     )
@@ -110,7 +123,10 @@ async def start_session(db, ambulance, user, hospital: str | None = None) -> Eme
 
 async def stop_session(db, s: EmergencySession, user, status="COMPLETED") -> EmergencySession:
     ensure_owner(s, user)
+    # Stop/cancel are safe to retry from the client after a lost response.
     if s.status not in ACTIVE_SESSION_STATUSES:
+        if s.status == status:
+            return s
         raise Conflict(f"Cannot stop session in {s.status}")
     s.status = status
     s.ended_reason = status
@@ -119,9 +135,74 @@ async def stop_session(db, s: EmergencySession, user, status="COMPLETED") -> Eme
     q = await db.execute(
         select(EmergencyCommand).where(
             EmergencyCommand.session_id == s.id,
+            EmergencyCommand.command_type == "PRIORITY_REQUEST",
             EmergencyCommand.status.in_(("PENDING", "SENT", "ACKNOWLEDGED")),
         )
     )
     for c in q.scalars():
         c.status = "RELEASED"
     return s
+
+
+async def release_session_commands(db, session_id: uuid.UUID):
+    """Create one idempotent release command per active priority approach."""
+    from app.services.command_service import create_release
+
+    rows = (
+        await db.execute(
+            select(EmergencyCommand).where(
+                EmergencyCommand.session_id == session_id,
+                EmergencyCommand.command_type == "PRIORITY_REQUEST",
+                EmergencyCommand.status.in_(
+                    ("PENDING", "SENT", "ACKNOWLEDGED", "HELD")
+                ),
+            )
+        )
+    ).scalars().all()
+    releases = []
+    seen: set[tuple[uuid.UUID, str]] = set()
+    for row in rows:
+        key = (row.junction_id, row.approach)
+        if key in seen:
+            continue
+        seen.add(key)
+        releases.append(await create_release(db, session_id, row.junction_id, row.approach))
+    # A previous publish may have failed after the transaction committed.  A
+    # retry of stop/cancel should resend that still-pending release command.
+    existing_releases = (
+        await db.execute(
+            select(EmergencyCommand).where(
+                EmergencyCommand.session_id == session_id,
+                EmergencyCommand.command_type == "RELEASE_PRIORITY",
+                EmergencyCommand.status.in_(("PENDING", "SENT", "EXPIRED")),
+            )
+        )
+    ).scalars().all()
+    for row in existing_releases:
+        key = (row.junction_id, row.approach)
+        if key not in seen:
+            seen.add(key)
+            if row.status == "EXPIRED":
+                row = await create_release(db, session_id, row.junction_id, row.approach)
+            releases.append(row)
+    return releases
+
+
+async def publish_release_commands(commands) -> bool:
+    """Publish releases with a small in-request retry suitable for the prototype."""
+    from app.services.gps_service import publish_command
+
+    all_sent = True
+    for command in commands:
+        sent = False
+        for _ in range(3):
+            if await publish_command(command, str(command.junction_id), command.approach):
+                sent = True
+                break
+        if sent:
+            # Persist delivery state so a later /emergencies/current can
+            # distinguish a release that was published from one that still
+            # needs a retry.  The command remains correlated/idempotent.
+            command.status = "SENT"
+        all_sent = all_sent and sent
+    return all_sent

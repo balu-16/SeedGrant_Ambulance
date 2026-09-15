@@ -53,7 +53,10 @@ class AmbulanceAssignIn(BaseModel):
 # Portal roles a ADMIN may assign (public register stays driver-only).
 # Stored lowercase in DB (portal_role_lc ENUM); validation accepts any case.
 PORTAL_ROLES = ("admin", "hospital", "police", "driver")
-_ROLE_PATTERN = "^([Aa][Dd][Mm][Ii][Nn]|[Hh][Oo][Ss][Pp][Ii][Tt][Aa][Ll]|[Pp][Oo][Ll][Ii][Cc][Ee]|[Dd][Rr][Ii][Vv][Ee][Rr])$"
+_ROLE_PATTERN = (
+    "^([Aa][Dd][Mm][Ii][Nn]|[Hh][Oo][Ss][Pp][Ii][Tt][Aa][Ll]|"
+    "[Pp][Oo][Ll][Ii][Cc][Ee]|[Dd][Rr][Ii][Vv][Ee][Rr])$"
+)
 
 
 class AdminUserCreateIn(BaseModel):
@@ -90,7 +93,7 @@ class HospitalIn(BaseModel):
     address: str = Field(default="", max_length=255)
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
-    phone: str = Field(default="", max_length=32)
+    phone: str = Field(default="", max_length=32, pattern=r"^[+\d][\d ()-]{6,31}$|^$")
 
 
 class HospitalPatchIn(BaseModel):
@@ -126,7 +129,7 @@ class JunctionIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)  # DB column is String(128)
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
-    radius_m: float = Field(default=500.0, ge=0.1)  # a zero/negative radius is meaningless
+    radius_m: float = Field(default=500.0, ge=10, le=500)
 
 
 class GpsIn(BaseModel):
@@ -134,7 +137,7 @@ class GpsIn(BaseModel):
     longitude: float = Field(ge=-180, le=180)
     accuracy: float | None = Field(default=None, ge=0)
     speed: float | None = Field(default=None, ge=0)
-    heading: float | None = Field(default=None, ge=0, le=360)
+    heading: float | None = Field(default=None, ge=0, lt=360)
     timestamp: datetime | None = None
 
 

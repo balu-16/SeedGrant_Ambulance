@@ -7,6 +7,7 @@ sha256 hex id minted by the GPS -> PRIORITY_REQUEST pipeline.
 
 import re
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -250,3 +251,139 @@ async def test_gps_replay_same_fix_is_idempotent(client, db_factory, junction, d
             .all()
         )
         assert len(rows) == 1
+
+
+async def test_stop_release_is_pending_on_publish_failure_and_retryable(
+    client, db_factory, junction, driver, ambulance, monkeypatch
+):
+    """The UI must not treat a failed junction release as normal completion."""
+    from app.services import gps_service
+
+    start = await client.post(
+        "/api/v1/emergencies/start",
+        json={"ambulance_id": ambulance["id"]},
+        headers=driver["headers"],
+    )
+    sid = start.json()["data"]["session_id"]
+    fix = await gps_near_junction(db_factory, uuid.UUID(junction["id"]))
+    first = await client.post(
+        f"/api/v1/emergencies/{sid}/gps", json=fix, headers=driver["headers"]
+    )
+    assert first.status_code == 200
+
+    async def fail_publish(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(gps_service, "publish_command", fail_publish)
+    failed = await client.post(f"/api/v1/emergencies/{sid}/stop", headers=driver["headers"])
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["data"]["release_pending"] is True
+    assert failed.json()["data"]["release_sent"] is False
+    async with db_factory() as s:
+        pending_release = (
+            await s.execute(
+                select(EmergencyCommand).where(
+                    EmergencyCommand.session_id == uuid.UUID(sid),
+                    EmergencyCommand.command_type == "RELEASE_PRIORITY",
+                )
+            )
+        ).scalar_one()
+        assert pending_release.status == "PENDING"
+        pending_release.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await s.commit()
+
+    async def publish(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(gps_service, "publish_command", publish)
+    retry = await client.post(f"/api/v1/emergencies/{sid}/stop", headers=driver["headers"])
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["data"]["status"] == "COMPLETED"
+    assert retry.json()["data"]["release_pending"] is False
+
+    async with db_factory() as s:
+        rows = (
+            await s.execute(
+                select(EmergencyCommand).where(EmergencyCommand.session_id == uuid.UUID(sid))
+            )
+        ).scalars().all()
+        assert len([c for c in rows if c.command_type == "RELEASE_PRIORITY"]) == 1
+
+
+async def test_stale_and_finished_session_gps_are_rejected(
+    client, db_factory, junction, driver, ambulance
+):
+    start = await client.post(
+        "/api/v1/emergencies/start",
+        json={"ambulance_id": ambulance["id"]},
+        headers=driver["headers"],
+    )
+    sid = start.json()["data"]["session_id"]
+    fix = await gps_near_junction(db_factory, uuid.UUID(junction["id"]))
+    stale = {
+        **fix,
+        "timestamp": (datetime.now(UTC) - timedelta(seconds=601)).isoformat(),
+    }
+    rejected = await client.post(
+        f"/api/v1/emergencies/{sid}/gps", json=stale, headers=driver["headers"]
+    )
+    assert rejected.status_code == 422
+    assert (
+        await client.post(f"/api/v1/emergencies/{sid}/stop", headers=driver["headers"])
+    ).status_code == 200
+    finished = await client.post(
+        f"/api/v1/emergencies/{sid}/gps", json=fix, headers=driver["headers"]
+    )
+    assert finished.status_code == 409
+
+
+async def test_timeout_discovered_by_current_releases_priority(
+    client, db_factory, junction, driver, ambulance, monkeypatch
+):
+    """A request-side timeout must not skip the junction release path."""
+    from app.api.v1 import emergencies as emergency_router
+    from app.models.emergency import EmergencySession
+    from app.services import gps_service
+
+    start = await client.post(
+        "/api/v1/emergencies/start",
+        json={"ambulance_id": ambulance["id"]},
+        headers=driver["headers"],
+    )
+    sid = start.json()["data"]["session_id"]
+    fix = await gps_near_junction(db_factory, uuid.UUID(junction["id"]))
+    assert (
+        await client.post(
+            f"/api/v1/emergencies/{sid}/gps", json=fix, headers=driver["headers"]
+        )
+    ).status_code == 200
+
+    async with db_factory() as s:
+        session = await s.get(EmergencySession, uuid.UUID(sid))
+        session.last_gps_at = datetime.now(UTC) - timedelta(minutes=6)
+        await s.commit()
+
+    async def no_sweep(*_args, **_kwargs):
+        return {}
+
+    async def fail_publish(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(emergency_router, "sweep_timeouts", no_sweep)
+    monkeypatch.setattr(gps_service, "publish_command", fail_publish)
+    current = await client.get("/api/v1/emergencies/current", headers=driver["headers"])
+    assert current.status_code == 200, current.text
+    assert current.json()["data"]["active"] is False
+    assert current.json()["data"]["status"] == "TIMED_OUT"
+    assert current.json()["data"]["release_pending"] is True
+
+    async with db_factory() as s:
+        rows = (
+            await s.execute(
+                select(EmergencyCommand).where(
+                    EmergencyCommand.session_id == uuid.UUID(sid),
+                    EmergencyCommand.command_type == "RELEASE_PRIORITY",
+                )
+            )
+        ).scalars().all()
+        assert len(rows) == 1 and rows[0].status == "PENDING"

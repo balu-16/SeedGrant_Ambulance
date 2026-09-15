@@ -39,7 +39,7 @@ export function HospitalDriversPage() {
         <Empty
           icon="badge"
           title="No drivers linked yet"
-          body="Driver accounts registered under your hospital appear here once they are assigned to an ambulance."
+          body="Active driver accounts visible to your hospital appear here, including drivers not yet assigned to an ambulance."
         />
       ) : (
         <Table

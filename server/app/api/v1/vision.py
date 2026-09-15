@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.consts import OPEN_COMMAND_STATUSES, PROJECT_VEHICLE_CLASSES
@@ -50,20 +50,29 @@ async def ingest_detections(
 ):
     """Store Pi / edge detection records (max 200 per call).
 
-    Accepts EITHER a junction device API key (X-Device-Api-Key header — the
-    documented Pi ingest path) OR a user bearer token. A device may only tag
-    sessions that have an open command for its own junction.
+    Accepts a junction device API key (the documented Pi ingest path) or an
+    ADMIN bearer token for controlled demo seeding. Drivers and portal users
+    cannot inject traffic detections.
     """
     if len(body) > 200:
         raise AppError("max 200 detections per call", code="BAD_REQUEST", status_code=413)
     device_jid = getattr(principal, "junction_id", None)  # Device principal
     is_device = getattr(principal, "api_key_hash", None) is not None
+    if not is_device and str(getattr(principal, "role", "")).lower() != "admin":
+        raise Forbidden("Only a junction device or admin may submit detections")
+    if is_device and device_jid is None:
+        # Device records are normally non-null at the schema level; keep the
+        # ingest path fail-closed if an old/corrupt row is encountered.
+        raise Forbidden("Device is not bound to a junction")
     # validate junction_ids in a single query so bogus ids are skipped instead
     # of blowing up the whole batch on the FK constraint
     jids = {item.junction_id for item in body if item.junction_id}
     if is_device and device_jid is not None:
         # a Pi may only report for the junction it is bound to
-        jids = {j for j in jids if j == device_jid}
+        for item in body:
+            if item.junction_id is not None and item.junction_id != device_jid:
+                raise Forbidden("Device not bound to this junction")
+        jids = {device_jid if item.junction_id is None else item.junction_id for item in body}
     existing_jids: set = set()
     if jids:
         existing_jids = set(
@@ -114,13 +123,15 @@ async def ingest_detections(
             else:
                 ensure_owner(s, principal)
             session_id = s.id
-        if item.junction_id and item.junction_id not in existing_jids:
-            skipped += 1
-            continue
+        item_junction_id = (
+            device_jid if is_device and item.junction_id is None else item.junction_id
+        )
+        if item_junction_id and item_junction_id not in existing_jids:
+            raise NotFound("Junction not found")
         rows.append(
             Detection(
                 session_id=session_id,
-                junction_id=item.junction_id,
+                junction_id=item_junction_id,
                 vehicle_class=item.vehicle_class,
                 class_name=item.class_name,
                 confidence=item.confidence,
@@ -154,12 +165,24 @@ async def list_detections(
     rejected — rows span junctions.
     """
     q = select(Detection).order_by(desc(Detection.detected_at))
+    count_q = select(func.count()).select_from(Detection)
     if str(user.role).lower() == "police":
         pids = await police_junction_ids(db, user)
         if junction_id and junction_id not in pids:
             raise Forbidden("Junction not assigned to you")
         q = q.where(Detection.junction_id.in_(pids))
+        count_q = count_q.where(Detection.junction_id.in_(pids))
     if junction_id:
         q = q.where(Detection.junction_id == junction_id)
+        count_q = count_q.where(Detection.junction_id == junction_id)
+    total = (await db.execute(count_q)).scalar_one()
     rows = (await db.execute(q.limit(limit).offset(offset))).scalars().all()
-    return {"success": True, "data": [_detection_out(d) for d in rows]}
+    return {
+        "success": True,
+        "data": {
+            "items": [_detection_out(d) for d in rows],
+            "limit": limit,
+            "offset": offset,
+            "total": total,
+        },
+    }

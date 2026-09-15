@@ -4,9 +4,9 @@
  * junction's telemetry (latest first, monospace JSON).
  */
 
-import { useQuery } from "@tanstack/react-query";
-import { useState, type MouseEvent } from "react";
-import { listDevices, listJunctions, listTelemetry } from "@/services/portal";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { listDevices, listJunctions, listTelemetry, registerDevice, rotateDeviceKey } from "@/services/portal";
 import type { DeviceStatus } from "@/types/portal";
 import { Badge, Card, Drawer, Empty, PageHeader, Table, Txt, type TableColumn } from "@/components/ui";
 import { fmtAgo, fmtDateTime, shortId } from "@/pages/admin/shared";
@@ -33,13 +33,11 @@ export function DevicesPage() {
     (junctions.data ?? []).map((j) => [j.id, j.name]),
   );
   const selected = items.find((d) => d.id === selectedId) ?? null;
-
-  const onRowClick = (e: MouseEvent<HTMLDivElement>) => {
-    const tr = (e.target as HTMLElement).closest("tr");
-    if (!tr || tr.rowIndex === 0) return;
-    const row = items[tr.rowIndex - 1];
-    if (row) setSelectedId(row.id);
-  };
+  const queryClient = useQueryClient();
+  const [regJunctionId, setRegJunctionId] = useState("");
+  const [regName, setRegName] = useState("");
+  const [regResult, setRegResult] = useState<string | null>(null);
+  const [regError, setRegError] = useState<string | null>(null);
 
   const columns: TableColumn<DeviceStatus>[] = [
     {
@@ -91,11 +89,71 @@ export function DevicesPage() {
       ) : devices.isLoading ? (
         <LoadingBlock label="Loading devices" />
       ) : (
-        <div className="admin-row-click" onClick={onRowClick}>
+        <div>
+          <Card>
+            <Txt style={{ fontWeight: 700 }}>Register Pi device</Txt>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              <select value={regJunctionId} onChange={(e) => setRegJunctionId(e.target.value)}>
+                <option value="">Select junction…</option>
+                {(junctions.data ?? []).map((j) => (
+                  <option key={j.id} value={j.id}>{j.name}</option>
+                ))}
+              </select>
+              <input
+                placeholder="Device name"
+                value={regName}
+                onChange={(e) => setRegName(e.target.value)}
+              />
+              <button
+                onClick={() => {
+                  setRegError(null);
+                  setRegResult(null);
+                  if (!regJunctionId || !regName.trim()) {
+                    setRegError("Pick a junction and enter a device name.");
+                    return;
+                  }
+                  void registerDevice(regJunctionId, regName.trim())
+                    .then((r) => {
+                      setRegResult(`API key (shown once): ${r.api_key}`);
+                      setRegName("");
+                      void queryClient.invalidateQueries({ queryKey: ["admin", "devices"] });
+                    })
+                    .catch((e: unknown) => setRegError(e instanceof Error ? e.message : "Register failed"));
+                }}
+              >
+                Register
+              </button>
+            </div>
+            {regError ? <Txt style={{ color: "var(--red)" }}>{regError}</Txt> : null}
+            {regResult ? <Txt style={{ color: "var(--green)" }}>{regResult}</Txt> : null}
+          </Card>
+          <div style={{ height: 12 }} />
           <Table
-            columns={columns}
+            columns={[
+              ...columns,
+              {
+                key: "actions",
+                header: "Key",
+                render: (d) => (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!confirm(`Rotate API key for device ${d.id.slice(0, 8)}? Old key stops working.`)) return;
+                      setRegError(null);
+                      setRegResult(null);
+                      void rotateDeviceKey(d.id)
+                        .then((r) => setRegResult(`API key (shown once): ${r.api_key}`))
+                        .catch((err: unknown) => setRegError(err instanceof Error ? err.message : "Rotate failed"));
+                    }}
+                  >
+                    Rotate key
+                  </button>
+                ),
+              },
+            ]}
             rows={items}
             keyOf={(d) => d.id}
+            onRowClick={(d) => setSelectedId(d.id)}
             emptyFallback={
               <Empty
                 icon="memory"

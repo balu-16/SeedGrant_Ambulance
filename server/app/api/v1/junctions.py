@@ -6,10 +6,10 @@ from sqlalchemy import desc, select
 
 from app.api.v1.devices import _audit
 from app.core.config import get_settings
-from app.core.consts import OPEN_COMMAND_STATUSES
+from app.core.consts import ACTIVE_SESSION_STATUSES, OPEN_COMMAND_STATUSES
 from app.core.dependencies import get_db, police_junction_ids, require_any, require_role
 from app.core.exceptions import Conflict, Forbidden, NotFound
-from app.models.emergency import EmergencyCommand
+from app.models.emergency import EmergencyCommand, EmergencySession
 from app.models.junction import Approach, Junction
 from app.schemas.common import JunctionIn, JunctionPatchIn, OverrideIn
 from app.services import command_service
@@ -52,16 +52,23 @@ async def list_junctions(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db=Depends(get_db),
-    # POLICE need their junctions for the portal dashboard; HOSPITAL for context.
-    _=Depends(require_role("ADMIN", "DRIVER", "POLICE", "HOSPITAL")),
+    user=Depends(require_role("ADMIN", "DRIVER", "POLICE", "HOSPITAL")),
 ):
-    rows = (
-        (await db.execute(select(Junction).limit(limit).offset(offset))).scalars().all()
-    )
+    q = select(Junction).order_by(Junction.name).limit(limit).offset(offset)
+    if str(user.role).lower() == "police":
+        q = q.where(Junction.id.in_(await police_junction_ids(db, user)))
+    rows = (await db.execute(q)).scalars().all()
     return {
         "success": True,
         "data": [
-            {"id": str(j.id), "name": j.name, "latitude": j.latitude, "longitude": j.longitude}
+            {
+                "id": str(j.id),
+                "name": j.name,
+                "latitude": j.latitude,
+                "longitude": j.longitude,
+                "radius_m": j.radius_m,
+                "is_active": j.is_active,
+            }
             for j in rows
         ],
     }
@@ -69,24 +76,34 @@ async def list_junctions(
 
 @router.get("/{jid}")
 async def get_junction(
-    jid: uuid.UUID, db=Depends(get_db), _=Depends(require_role("ADMIN", "DRIVER"))
+    jid: uuid.UUID,
+    db=Depends(get_db),
+    user=Depends(require_role("ADMIN", "DRIVER", "POLICE", "HOSPITAL")),
 ):
     j = (
         await db.execute(select(Junction).where(Junction.id == jid))
     ).scalar_one_or_none()
     if not j:
         raise NotFound("Junction not found")
+    if str(user.role).lower() == "police" and jid not in await police_junction_ids(db, user):
+        raise Forbidden("Junction not assigned to you")
     apps = (await db.execute(select(Approach).where(Approach.junction_id == j.id))).scalars().all()
     return {
         "success": True,
         "data": {
             "id": str(j.id),
             "name": j.name,
+            "latitude": j.latitude,
+            "longitude": j.longitude,
+            "radius_m": j.radius_m,
+            "is_active": j.is_active,
             "approaches": [
                 {
                     "direction": a.direction,
                     "heading_min": a.heading_min,
                     "heading_max": a.heading_max,
+                    "entry_lat": a.entry_lat,
+                    "entry_lon": a.entry_lon,
                 }
                 for a in apps
             ],
@@ -112,6 +129,7 @@ async def update_junction(
     if not j:
         raise NotFound("Junction not found")
     changes: dict = {}
+    release_commands = []
     if body.name is not None and body.name != j.name:
         changes["name"] = {"from": j.name, "to": body.name}
         j.name = body.name
@@ -133,15 +151,35 @@ async def update_junction(
                     await db.execute(
                         select(EmergencyCommand).where(
                             EmergencyCommand.junction_id == j.id,
-                            EmergencyCommand.status.in_(OPEN_COMMAND_STATUSES),
+                            EmergencyCommand.status.in_(OPEN_COMMAND_STATUSES + ("HELD",)),
                         )
                     )
                 )
                 .scalars()
                 .all()
             )
-            for c in open_cmds:
-                c.status = "EXPIRED"
+            from app.services.emergency_service import release_session_commands, stop_session
+
+            session_ids = {c.session_id for c in open_cmds}
+            sessions = (
+                (
+                    await db.execute(
+                        select(EmergencySession).where(
+                            EmergencySession.id.in_(session_ids),
+                            EmergencySession.status.in_(ACTIVE_SESSION_STATUSES),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+                if session_ids
+                else []
+            )
+            for session_id in session_ids:
+                release_commands.extend(await release_session_commands(db, session_id))
+            for session in sessions:
+                await stop_session(db, session, user, status="CANCELLED")
+                session.ended_reason = "JUNCTION_DEACTIVATED"
             if open_cmds:
                 changes["released_commands"] = len(open_cmds)
     _audit(
@@ -152,7 +190,58 @@ async def update_junction(
         {"junction_id": str(j.id), "changes": changes},
     )
     await db.commit()
-    return {"success": True, "data": {"id": str(j.id), "is_active": j.is_active}}
+    release_sent = True
+    if release_commands:
+        from app.services.emergency_service import publish_release_commands
+
+        release_sent = await publish_release_commands(release_commands)
+        await db.commit()
+    return {
+        "success": True,
+        "data": {
+            "id": str(j.id),
+            "is_active": j.is_active,
+            "release_sent": release_sent,
+            "release_pending": not release_sent,
+        },
+    }
+
+
+@router.delete("/{jid}")
+async def delete_junction(
+    jid: uuid.UUID,
+    db=Depends(get_db),
+    user=Depends(require_role("ADMIN")),
+):
+    """Delete a junction only when it has no commands/devices/assignments.
+
+    Safe-delete: deactivation (PATCH is_active=false) is the normal path.
+    Hard delete is blocked while commands, devices, or police assignments
+    reference the junction to avoid orphaned history.
+    """
+    from app.models.device import Device as _Device
+    from app.models.emergency import EmergencyCommand as _Cmd
+    from app.models.junction import PoliceAssignment as _PA
+
+    j = (
+        await db.execute(select(Junction).where(Junction.id == jid))
+    ).scalar_one_or_none()
+    if not j:
+        raise NotFound("Junction not found")
+    for model, col, label in (
+        (_Cmd, _Cmd.junction_id, "commands"),
+        (_Device, _Device.junction_id, "devices"),
+        (_PA, _PA.junction_id, "police assignments"),
+    ):
+        n = (
+            await db.execute(select(model).where(col == jid).limit(1))
+        ).scalars().first()
+        if n is not None:
+            raise Conflict(f"Cannot delete junction with existing {label} — deactivate it instead")
+    _audit(db, str(user.id), "junction.delete", "junctions", {"junction_id": str(j.id)})
+    await db.delete(j)
+    await db.commit()
+    return {"success": True, "data": {"deleted": True}}
 
 
 async def _latest_command(db, jid: uuid.UUID, statuses: tuple[str, ...]):
@@ -192,14 +281,19 @@ async def override_junction(
     j = (await db.execute(select(Junction).where(Junction.id == jid))).scalar_one_or_none()
     if not j:
         raise NotFound("Junction not found")
+    if not j.is_active:
+        raise Conflict("Junction is deactivated — override not allowed")
     now = datetime.now(UTC)
+    release_sent = True
     if body.action in ("FORCE_RELEASE", "HOLD"):
         cmd = await _latest_command(db, jid, OPEN_COMMAND_STATUSES)
         if not cmd:
             raise Conflict("No open priority command at this junction")
         if body.action == "FORCE_RELEASE":
             cmd = await command_service.create_release(db, cmd.session_id, jid, cmd.approach)
-            await publish_command(cmd, str(jid), cmd.approach)
+            from app.services.emergency_service import publish_release_commands
+
+            release_sent = await publish_release_commands([cmd])
         else:  # HOLD: shelve the open command, nothing is published. HELD (not
             # EXPIRED, which the GPS pipeline re-arms) so the officer's decision
             # survives subsequent fixes until FORCE_RELEASE/REISSUE.
@@ -266,5 +360,7 @@ async def override_junction(
                 "correlation_id": cmd.correlation_id,
                 "retry_count": cmd.retry_count,
             },
+            "release_sent": release_sent,
+            "release_pending": not release_sent,
         },
     }

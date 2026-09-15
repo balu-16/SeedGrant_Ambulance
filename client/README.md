@@ -14,13 +14,12 @@ npm start
 
 Scan the Metro QR code with a compatible Android Expo Go installation. With an Android SDK and an emulator or USB-connected device available, run `npm run android`. Use `npm run web` for a browser preview. Expo development loading needs access to Metro; after loading, application workflows work offline. An installed standalone Android build bundles the JavaScript and assets.
 
-## Demo credentials
+## Local mock credentials
 
-- Driver ID: `driver001`
-- Email alternative: `driver001@example.com`
+- Email: `driver001@example.com`
 - Password: `123456`
 
-These are public mock credentials used for local UI tests only. Set `EXPO_PUBLIC_API_URL` in `.env` (bare origin, no `/api/v1` suffix) or via the EAS dashboard (preview/production) to link the app to the backend; with the API enabled, real driver accounts authenticate against the backend and non-driver roles are rejected. EAS `env` in `eas.json` overrides `.env` at build time — rebuild or EAS Update after changing dashboard vars. Profile edits do not change the login credentials.
+These credentials are used by the local Playwright mock only. Set `EXPO_PUBLIC_API_URL` in `.env` (bare origin, no `/api/v1` suffix) or via the EAS dashboard (preview/production) to link the app to the backend; real driver accounts authenticate by email and non-driver roles are rejected. EAS `env` in `eas.json` overrides `.env` at build time — rebuild or EAS Update after changing dashboard vars. Profile edits do not change the login credentials.
 
 ## Project structure
 
@@ -30,8 +29,8 @@ client/
 ├── components/          # Shared controls, artwork primitives, timeline, navigation
 ├── features/
 │   ├── onboarding/      # Three illustrated, swipeable pages
-│   ├── auth/            # Validated mock login
-│   ├── home/            # Emergency control and simulation status
+│   ├── auth/            # Validated backend login
+│   ├── home/            # Emergency control and live status
 │   ├── history/         # Sessions, filters, search, event details
 │   └── profile/         # Driver/ambulance editors and settings
 ├── assets/
@@ -52,23 +51,23 @@ client/
 
 First launch shows onboarding. Next, page dots, swiping, Skip, and Get Started work. Completing or skipping onboarding persists that choice. Returning signed-out users see Login, and returning signed-in users see Home.
 
-START EMERGENCY begins a local simulation. Every three seconds in the foreground, it requests priority, grants green priority, releases priority, or crosses a junction. It then approaches the next mock junction. Simulation continues across tabs, pauses in the background, and resumes from the saved step after reopening without synthesizing background location events. Emergency duration uses elapsed wall-clock time. Stop releases outstanding priority and records one completed session in History. When the backend is linked, the same Start/Stop also opens and closes a server emergency session and streams GPS fixes to it; the location watch runs only while a session is active.
+START EMERGENCY opens a backend emergency session and streams real GPS fixes while the session is active. The backend decides when to request and release junction priority. The session id and active state survive app reloads, and Stop waits for the backend to confirm the session and priority release before saving it to History. The local mock backend used by browser tests implements the same contract.
 
 History filters use local calendar days, Monday-start weeks, and calendar months. The initial four fixtures use dates relative to first launch. Summary values derive from this month's actual saved sessions. Search matches hospital names; each card can expand to show every event.
 
-Profile changes and settings persist locally. Password and support actions explain administrator-managed credentials. Logout ends any active backend emergency session, clears the local session and stored tokens, and preserves onboarding, completed history, settings, and profile edits. During an active emergency, logout requires confirmation and completes that emergency first.
+Profile changes and settings persist locally. Password and support actions explain administrator-managed credentials. Logout ends any active backend emergency session before clearing the local session and stored tokens. If the backend cannot confirm priority release, logout remains pending so the app does not claim the emergency ended.
 
-Storage failures display a retry action. If a saved record is invalid or incompatible, the app offers an explicit reset of local demo data. Passwords are never saved or logged.
+Storage failures display a retry action. If a saved record is invalid or incompatible, the app offers an explicit reset of local state. Passwords are never saved or logged.
 
 ## Integration seams
 
 - `services/api.ts`: real FastAPI client — JWT storage (SecureStore on native, AsyncStorage on web), single-flight refresh on 401, envelope unwrapping.
-- `services/auth.ts`: backend login first, demo-credential fallback. `services/emergency.ts`: backend emergency session start/GPS/stop/history alongside the local simulator.
+- `services/auth.ts`: email-only backend login with fail-closed identity verification. `services/emergency.ts`: backend emergency session start/GPS/stop/history.
 - `services/notifications.ts`: Expo push permission + token registration to `POST /push/register` (dev builds need `extra.eas.projectId` in `app.json`).
 - The reducer owns emergency start/stop, event history, and profile edits; profile saves also PATCH `/auth/profile` when linked.
 - `services/storage.ts`: versioned AsyncStorage state with ordered writes; `utils/persistence.ts` validates saved records before hydration.
 
-Connection, ETA, hospital routes, driver identity, and signal states remain simulated. Location permission is requested only when an emergency session starts, and GPS is streamed to the backend only while a session is active. Patient records and external maps are absent.
+Connection, ETA, hospital routes, and signal states are prototype-level integrations. Location permission is requested only when an emergency session starts, and GPS is streamed to the backend only while a session is active. Patient handoff and external maps are optional demo helpers.
 
 ## Packages and checks
 
@@ -79,7 +78,7 @@ npm run typecheck
 npm run lint
 npm run format:check
 npm test
-npm run test:e2e       # Uses installed Google Chrome; starts/reuses Metro on 8081
+npm run test:e2e       # Uses Playwright Chromium; starts/reuses Metro on 8081
 npx expo install --check
 npx expo-doctor
 npm run export:android

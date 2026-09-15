@@ -9,7 +9,7 @@ import { useEffect } from "react";
 import * as L from "leaflet";
 import { MapContainer, Marker, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { DEFAULT_CENTER } from "@/pages/shared/format";
+import { DEFAULT_CENTER, tileUrl } from "@/pages/shared/format";
 
 export interface MapDot {
   id: string;
@@ -78,11 +78,7 @@ export function MapView({
     >
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors'
-        url={
-          (import.meta as unknown as { env?: Record<string, string> }).env
-            ?.VITE_TILES_URL ??
-          "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        }
+        url={tileUrl()}
       />
       <Recenter lat={center[0]} lng={center[1]} />
       {dots.map((dot) => (

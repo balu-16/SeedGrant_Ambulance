@@ -64,13 +64,13 @@ async def test_force_release_issues_release_command_and_publishes(
     data = r.json()["data"]
     assert data["action"] == "FORCE_RELEASE"
     assert data["command"]["type"] == "RELEASE_PRIORITY"
-    assert data["command"]["status"] == "PENDING"
+    assert data["command"]["status"] == "SENT"
 
     rows = await _commands_for(db_factory, junction["id"])
     by_id = {c.id: c for c in rows}
     assert by_id[cmd.id].status == "RELEASED"  # the open priority was released
     releases = [c for c in rows if c.command_type == "RELEASE_PRIORITY"]
-    assert len(releases) == 1 and releases[0].status == "PENDING"
+    assert len(releases) == 1 and releases[0].status == "SENT"
     assert releases[0].correlation_id == data["command"]["correlation_id"]
 
     published = [

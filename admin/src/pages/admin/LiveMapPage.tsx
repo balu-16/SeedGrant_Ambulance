@@ -19,6 +19,7 @@ import "leaflet/dist/leaflet.css";
 
 import { fetchLive, listJunctions } from "@/services/portal";
 import type { LiveSession } from "@/types/portal";
+import { tileUrl } from "@/pages/shared/format";
 import { statusTone } from "@/components/helpers";
 import {
   Badge,
@@ -39,9 +40,7 @@ const OSM_ATTR =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 // Self-host tiles in production: set VITE_TILES_URL to your tile server.
 // Defaults to public OSM (rate-limited) for dev.
-const OSM_URL =
-  (import.meta as unknown as { env?: Record<string, string> }).env
-    ?.VITE_TILES_URL ?? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+const OSM_URL = tileUrl();
 // Shared India fallback (same as pages/shared/format DEFAULT_CENTER source).
 // Junctions/sessions with real coords recenter the map; this is last resort.
 const DEFAULT_CENTER: [number, number] = [20.5937, 78.9629];

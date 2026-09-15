@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test } from "@playwright/test";
 test("debug login", async ({ page }) => {
   const logs: string[] = [];
   page.on("console", (m) => logs.push(`console: ${m.text().slice(0, 200)}`));
@@ -14,7 +14,7 @@ test("debug login", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Skip", exact: true }).first().click();
   await page
-    .getByRole("textbox", { name: "Driver ID / Email" })
+    .getByRole("textbox", { name: "Email" })
     .fill("driver001@example.com");
   await page.getByLabel("Password", { exact: true }).fill("wrong");
   await page.getByRole("button", { name: "Login", exact: true }).click();

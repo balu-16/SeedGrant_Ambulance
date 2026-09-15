@@ -119,7 +119,7 @@ export function patchAmbulance(
 
 /** Drivers directory derived from the visible fleet (ADMIN all / HOSPITAL own). */
 export function listFleetDrivers(): Promise<
-  { driver_id: string; email: string | null; ambulance_id: string; vehicle_no: string }[]
+  { driver_id: string; email: string | null; ambulance_id: string | null; vehicle_no: string | null }[]
 > {
   return request("/admin/fleet/drivers");
 }
@@ -151,6 +151,10 @@ export function fetchEmergencies(params: {
   limit?: number;
   offset?: number;
   status?: string;
+  junction_id?: string;
+  ambulance_id?: string;
+  from?: string;
+  to?: string;
 } = {}): Promise<Paged<EmergencyRow>> {
   const q = new URLSearchParams(
     Object.entries(params).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]),
@@ -177,6 +181,17 @@ export function createJunction(body: {
   return request<{ id: string }>("/junctions", { method: "POST", body });
 }
 
+export function patchJunction(
+  jid: string,
+  body: Partial<{ name: string; latitude: number; longitude: number; radius_m: number; is_active: boolean }>,
+): Promise<{ id: string }> {
+  return request(`/junctions/${jid}`, { method: "PATCH", body });
+}
+
+export function deleteJunction(jid: string): Promise<{ deleted: boolean }> {
+  return request(`/junctions/${jid}`, { method: "DELETE" });
+}
+
 export function overrideJunction(
   jid: string,
   action: "FORCE_RELEASE" | "HOLD" | "REISSUE",
@@ -193,6 +208,8 @@ export function listCommands(params: {
   status?: string;
   limit?: number;
   offset?: number;
+  since?: string;
+  until?: string;
 } = {}): Promise<CommandRow[]> {
   const q = new URLSearchParams(
     Object.entries(params).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]),
@@ -206,17 +223,39 @@ export function listDevices(): Promise<
   return request("/admin/devices/status");
 }
 
+export function registerDevice(junctionId: string, name: string): Promise<{ device_id: string; api_key: string }> {
+  return request(`/admin/devices/register?junction_id=${junctionId}&name=${encodeURIComponent(name)}`, {
+    method: "POST",
+  });
+}
+
+export function rotateDeviceKey(deviceId: string): Promise<{ device_id: string; api_key: string }> {
+  return request(`/admin/devices/${deviceId}/rotate-key`, { method: "POST" });
+}
+
+export function fetchMqttHealth(): Promise<{ connected: boolean; outbox: number }> {
+  return request("/admin/mqtt/health");
+}
+
+export function fetchNotificationPrefs(): Promise<Record<string, boolean>> {
+  return request("/admin/notification-prefs");
+}
+
+export function saveNotificationPrefs(prefs: Record<string, boolean>): Promise<Record<string, boolean>> {
+  return request("/admin/notification-prefs", { method: "PUT", body: { prefs } });
+}
+
 export function listTelemetry(junctionId: string, limit = 50): Promise<Paged<TelemetryRow>> {
   return request(`/telemetry?junction_id=${junctionId}&limit=${limit}`);
 }
 
-export function listDetections(params: { junction_id?: string; limit?: number } = {}): Promise<
-  DetectionRow[]
+export function listDetections(params: { junction_id?: string; limit?: number; offset?: number } = {}): Promise<
+  { items: DetectionRow[]; limit: number; offset: number; total: number } | DetectionRow[]
 > {
   const q = new URLSearchParams(
     Object.entries(params).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]),
   );
-  return request<DetectionRow[]>(`/vision/detections?${q}`);
+  return request<DetectionRow[] | { items: DetectionRow[]; limit: number; offset: number; total: number }>(`/vision/detections?${q}`);
 }
 
 // ---- self service (HOSPITAL / POLICE) ---------------------------------------

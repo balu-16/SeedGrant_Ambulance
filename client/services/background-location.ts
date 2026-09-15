@@ -14,10 +14,13 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
 import * as TaskManager from "expo-task-manager";
 import { backendGps } from "./emergency";
+import { ApiError } from "./api";
 
 export const BG_LOCATION_TASK = "ambulance-bg-location";
 export const GPS_OUTBOX_KEY = "ambulance-driver:gps-outbox:v1";
+const GPS_ACTIVE_SESSION_KEY = "ambulance-driver:gps-active-session:v1";
 const MAX_OUTBOX = 200;
+const MAX_QUEUED_AGE_MS = 10 * 60 * 1000;
 
 export interface QueuedFix {
   sessionId: string;
@@ -31,6 +34,7 @@ export interface QueuedFix {
 
 let activeSessionId: string | null = null;
 let taskDefined = false;
+let outboxWrite: Promise<void> = Promise.resolve();
 
 function defineTaskOnce(): void {
   if (taskDefined) return;
@@ -38,8 +42,10 @@ function defineTaskOnce(): void {
   TaskManager.defineTask<{ locations?: Location.LocationObject[] }>(
     BG_LOCATION_TASK,
     async ({ data, error }) => {
-      if (error || !data?.locations?.length || !activeSessionId) return;
-      const sessionId = activeSessionId;
+      if (error || !data?.locations?.length) return;
+      const sessionId =
+        activeSessionId ?? (await AsyncStorage.getItem(GPS_ACTIVE_SESSION_KEY));
+      if (!sessionId) return;
       for (const loc of data.locations) {
         const fix: QueuedFix = {
           sessionId,
@@ -84,16 +90,21 @@ async function readOutbox(): Promise<QueuedFix[]> {
 }
 
 export async function enqueueFix(fix: QueuedFix): Promise<void> {
-  try {
-    const box = await readOutbox();
-    box.push(fix);
-    await AsyncStorage.setItem(
-      GPS_OUTBOX_KEY,
-      JSON.stringify(box.slice(-MAX_OUTBOX)),
-    );
-  } catch {
-    /* storage unavailable — drop, next live fix continues */
-  }
+  outboxWrite = outboxWrite
+    .catch(() => undefined)
+    .then(async () => {
+      try {
+        const box = await readOutbox();
+        box.push(fix);
+        await AsyncStorage.setItem(
+          GPS_OUTBOX_KEY,
+          JSON.stringify(box.slice(-MAX_OUTBOX)),
+        );
+      } catch {
+        /* storage unavailable — drop, next live fix continues */
+      }
+    });
+  await outboxWrite;
 }
 
 /** Retry queued fixes in order; keeps failures for the next flush. */
@@ -106,11 +117,27 @@ export async function flushOutbox(): Promise<{
   const remaining: QueuedFix[] = [];
   let sent = 0;
   for (const fix of box) {
+    // The API intentionally rejects stale capture times. Drop these locally
+    // instead of retrying them forever after a long offline period.
+    if (
+      !Number.isFinite(fix.timestamp) ||
+      Date.now() - fix.timestamp > MAX_QUEUED_AGE_MS
+    ) {
+      continue;
+    }
     try {
       await backendGps(fix.sessionId, fix);
       sent += 1;
-    } catch {
-      remaining.push(fix);
+    } catch (error) {
+      // A finished session, invalid fix, or unauthorized session cannot be
+      // repaired by retrying; only transport failures remain queued.
+      if (
+        !(error instanceof ApiError) ||
+        error.status === 0 ||
+        error.status >= 500
+      ) {
+        remaining.push(fix);
+      }
     }
   }
   await AsyncStorage.setItem(GPS_OUTBOX_KEY, JSON.stringify(remaining)).catch(
@@ -133,6 +160,7 @@ export async function startBackgroundTracking(
   try {
     defineTaskOnce();
     activeSessionId = sessionId;
+    await AsyncStorage.setItem(GPS_ACTIVE_SESSION_KEY, sessionId);
     const fg = await Location.getForegroundPermissionsAsync();
     if (!fg.granted) return "unavailable";
     const bg = await requestBackgroundPermission();
@@ -160,6 +188,7 @@ export async function startBackgroundTracking(
 
 export async function stopBackgroundTracking(): Promise<void> {
   activeSessionId = null;
+  await AsyncStorage.removeItem(GPS_ACTIVE_SESSION_KEY).catch(() => undefined);
   try {
     const registered =
       await TaskManager.isTaskRegisteredAsync(BG_LOCATION_TASK);

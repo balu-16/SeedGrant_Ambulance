@@ -31,7 +31,7 @@ async def register_device(
     junction_id: uuid.UUID,
     name: str = Query(min_length=1, max_length=128),  # DB column is String(128)
     db=Depends(get_db),
-    _=Depends(require_role("ADMIN")),
+    admin=Depends(require_role("ADMIN")),
 ):
     j = (
         await db.execute(select(Junction).where(Junction.id == junction_id))
@@ -41,7 +41,13 @@ async def register_device(
     raw = secrets.token_hex(24)
     d = Device(junction_id=j.id, name=name, api_key_hash=hash_api_key(raw))
     db.add(d)
-    _audit(db, "admin", "device.register", "devices", {"junction_id": str(j.id), "name": name})
+    _audit(
+        db,
+        str(admin.id),
+        "device.register",
+        "devices",
+        {"junction_id": str(j.id), "name": name},
+    )
     try:
         await db.commit()
     except IntegrityError:
@@ -52,13 +58,13 @@ async def register_device(
 
 
 @router.post("/admin/devices/{did}/rotate-key")
-async def rotate_key(did: uuid.UUID, db=Depends(get_db), _=Depends(require_role("ADMIN"))):
+async def rotate_key(did: uuid.UUID, db=Depends(get_db), admin=Depends(require_role("ADMIN"))):
     d = (await db.execute(select(Device).where(Device.id == did))).scalar_one_or_none()
     if not d:
         raise NotFound("Device not found")
     raw = secrets.token_hex(24)
     d.api_key_hash = hash_api_key(raw)
-    _audit(db, "admin", "device.rotate_key", "devices", {"device_id": str(did)})
+    _audit(db, str(admin.id), "device.rotate_key", "devices", {"device_id": str(did)})
     await db.commit()
     return {"success": True, "data": {"device_id": str(d.id), "api_key": raw}}
 
@@ -85,7 +91,7 @@ async def telemetry(body: TelemetryIn, db=Depends(get_db), dev: Device = Depends
 
 @router.get("/junctions/{jid}/state")
 async def junction_state(
-    jid: uuid.UUID, db=Depends(get_db), _=Depends(require_role("ADMIN", "DRIVER"))
+    jid: uuid.UUID, db=Depends(get_db), _=Depends(require_role("ADMIN"))
 ):
     t = (
         await db.execute(
@@ -110,10 +116,20 @@ async def telemetry_history(
     user=Depends(require_any("ADMIN", "POLICE")),
 ):
     """Telemetry history for a junction — ADMIN anywhere, POLICE on assigned junctions."""
-    if str(user.role).lower() == "police" and junction_id not in await police_junction_ids(db, user):
+    from sqlalchemy import func as _func
+
+    if (
+        str(user.role).lower() == "police"
+        and junction_id not in await police_junction_ids(db, user)
+    ):
         raise Forbidden("Junction not assigned to you")
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
+    total = (
+        await db.execute(
+            select(_func.count()).select_from(Telemetry).where(Telemetry.junction_id == junction_id)
+        )
+    ).scalar_one()
     rows = (
         (
             await db.execute(
@@ -133,5 +149,6 @@ async def telemetry_history(
             "items": [{"payload": r.payload, "at": r.created_at.isoformat()} for r in rows],
             "limit": limit,
             "offset": offset,
+            "total": total,
         },
     }

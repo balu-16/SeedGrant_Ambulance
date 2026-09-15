@@ -22,7 +22,7 @@ Inference runs on the Pi (edge) and is ingested via
 ## Quick start (each folder is independent)
 
 ```bash
-# Backend (Render mirrors this, minus seed)
+# Backend (Render uses the Docker image defined by render.yaml)
 cd server && uv sync && cp .env.example .env && alembic upgrade head \
   && python -m app.db.seed && pytest && python main.py   # :8000, /docs
 
@@ -53,8 +53,10 @@ All of these are gitignored — never commit, zip, or share them:
 
 ## Deploy map
 
-- **Backend → Render**: repo root cloned, build `cd server && …`, start
-  `cd server && uv run uvicorn app.main:app`. `CORS_ORIGINS` must include the
+- **Backend → Render**: keep the repository root as the Blueprint root. Render
+  uses `render.yaml` and `server/Dockerfile`; the image runs Alembic migrations
+  and then starts FastAPI. Configure the database, JWT, MQTT, and exact Vercel
+  origin in Render environment variables. `CORS_ORIGINS` must include the
   Vercel URL.
 - **Admin → Vercel**: new project, Root Directory `admin/`, build
   `npm ci && npm run build`, output `dist`, env

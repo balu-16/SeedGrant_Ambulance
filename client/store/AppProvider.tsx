@@ -11,7 +11,8 @@ import {
 import { initialState } from "@/services/defaultState";
 import { loadState, saveState } from "@/services/storage";
 import type { AppState } from "@/types/models";
-import { reducer, type Action } from "./reducer";export interface AppContextValue {
+import { reducer, type Action } from "./reducer";
+export interface AppContextValue {
   state: AppState;
   dispatch: Dispatch<Action>;
   hydrated: boolean;

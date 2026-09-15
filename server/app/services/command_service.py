@@ -39,6 +39,14 @@ def _maybe_rearm(cmd: EmergencyCommand, cfg, now) -> bool:
 async def get_or_create_priority(db, session_id: uuid.UUID, junction_id: uuid.UUID, approach: str):
     """Idempotent PRIORITY_REQUEST creation (safe against concurrent duplicates)."""
     cfg = get_settings()
+    # Never create/re-arm priority toward a deactivated junction.
+    from app.models.junction import Junction as _Junction
+
+    _j = (
+        await db.execute(select(_Junction).where(_Junction.id == junction_id))
+    ).scalar_one_or_none()
+    if _j is not None and not _j.is_active:
+        return None, False
     cid = correlation_id(session_id, junction_id, approach, "PRIORITY_REQUEST")
     existing = (
         await db.execute(select(EmergencyCommand).where(EmergencyCommand.correlation_id == cid))
@@ -73,11 +81,24 @@ async def get_or_create_priority(db, session_id: uuid.UUID, junction_id: uuid.UU
 
 
 async def create_release(db, session_id: uuid.UUID, junction_id: uuid.UUID, approach: str):
+    """Create or reuse the single release command for a session/junction/approach."""
     cfg = get_settings()
     now = datetime.now(UTC)
-    cid = correlation_id(
-        session_id, junction_id, approach, "RELEASE_PRIORITY", suffix=uuid.uuid4().hex[:8]
-    )
+    # Release is an idempotent safety action.  A deterministic correlation id
+    # prevents stop, timeout, crossing, and manual override paths from minting
+    # several equivalent release commands.
+    cid = correlation_id(session_id, junction_id, approach, "RELEASE_PRIORITY")
+    existing = (
+        await db.execute(
+            select(EmergencyCommand).where(EmergencyCommand.correlation_id == cid)
+        )
+    ).scalar_one_or_none()
+    if existing:
+        if existing.status == "EXPIRED":
+            existing.status = "PENDING"
+            existing.expires_at = now + timedelta(seconds=cfg.COMMAND_TTL_SECONDS)
+            existing.retry_count = (existing.retry_count or 0) + 1
+        return existing
     cmd = EmergencyCommand(
         session_id=session_id,
         junction_id=junction_id,
@@ -97,7 +118,7 @@ async def create_release(db, session_id: uuid.UUID, junction_id: uuid.UUID, appr
         )
     )
     for c in q.scalars():
-        if c.status in ("PENDING", "SENT", "ACKNOWLEDGED"):
+        if c.status in ("PENDING", "SENT", "ACKNOWLEDGED", "HELD"):
             c.status = "RELEASED"
     await db.flush()
     return cmd

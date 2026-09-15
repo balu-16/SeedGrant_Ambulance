@@ -67,7 +67,7 @@ seed only. Refresh tokens rotate on every refresh; a rotated token is rejected.
 - `POST|GET|DELETE /push/*` (push-token register/list/remove)
 - `POST /ambulances`, `GET /ambulances`, `GET /ambulances/mine`, `GET|PATCH /ambulances/{id}`
 - `POST /junctions`, `GET /junctions`, `GET /junctions/{id}`, `POST /junctions/{id}/override`
-- `GET /hospitals`, `GET /hospitals/{id}` (destination picker — read-only, all roles)
+- `GET /hospitals`, `GET /hospitals/{id}` (destination picker — read-only; HOSPITAL users are scoped to their own hospital)
 - `POST /admin/devices/register` (returns api_key once), `POST /admin/devices/{id}/rotate-key`
 - `POST /devices/heartbeat|telemetry` (`X-Device-Api-Key`)
 - `GET /junctions/{id}/state`, `GET /telemetry?junction_id&limit&offset`
@@ -83,10 +83,9 @@ seed only. Refresh tokens rotate on every refresh; a rotated token is rejected.
 - `POST|GET /vision/detections` (Pi-side inference ingest + portal listing; the server runs no model)
 - `GET /health`, `GET /ready` (503 when DB down)
 
-## Admin portal hosting (legacy)
+## Admin portal hosting
 
-The portal now deploys standalone on Vercel (see `../admin/README.md`) and
-calls this API cross-origin via `VITE_API_URL`, so keep `CORS_ORIGINS`
-in sync with the Vercel URL. The old same-origin mount (`admin/dist` served
-at `/admin` via `app/main.py`) is retained as a guarded fallback only and
-`admin/dist` is not built on Render.
+The portal deploys standalone on Vercel (see `../admin/README.md`) and calls
+this API cross-origin via `VITE_API_URL`, so keep `CORS_ORIGINS` in sync with
+the Vercel URL. The Render image contains only the backend; the portal is not
+served from FastAPI.

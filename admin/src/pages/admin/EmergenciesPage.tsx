@@ -5,7 +5,7 @@
  */
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useState, type MouseEvent } from "react";
+import { useState } from "react";
 import { fetchEmergencies } from "@/services/portal";
 import { downloadCsv } from "@/utils/csv";
 import type { EmergencyRow } from "@/types/portal";
@@ -50,13 +50,7 @@ export function EmergenciesPage() {
 
   const items = q.data?.items ?? [];
 
-  /** Row-click delegation — the shared Table renders plain <tr> elements. */
-  const onRowClick = (e: MouseEvent<HTMLDivElement>) => {
-    const tr = (e.target as HTMLElement).closest("tr");
-    if (!tr || tr.rowIndex === 0) return; // header row
-    const row = items[tr.rowIndex - 1];
-    if (row) setSelected(row);
-  };
+  const onRowSelect = (row: (typeof items)[number]) => setSelected(row);
 
   const columns: TableColumn<EmergencyRow>[] = [
     {
@@ -159,11 +153,12 @@ export function EmergenciesPage() {
             />
           </div>
 
-          <div className="admin-row-click" onClick={onRowClick}>
+          <div>
             <Table
               columns={columns}
               rows={items}
               keyOf={(r) => r.id}
+              onRowClick={onRowSelect}
               emptyFallback={
                 <Empty
                   icon="emergency"

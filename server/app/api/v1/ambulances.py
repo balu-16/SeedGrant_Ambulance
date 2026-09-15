@@ -38,6 +38,23 @@ async def _require_hospital(db, hospital_id) -> None:
         raise NotFound("Hospital not found")
 
 
+async def _require_driver(db, driver_id, hospital_id=None) -> User:
+    driver = (
+        await db.execute(select(User).where(User.id == driver_id))
+    ).scalar_one_or_none()
+    if not driver:
+        raise NotFound("Driver not found")
+    if str(driver.role).lower() != "driver" or not driver.is_active:
+        raise Forbidden("Assigned user must be an active driver")
+    if (
+        hospital_id is not None
+        and driver.hospital_id is not None
+        and driver.hospital_id != hospital_id
+    ):
+        raise Forbidden("Driver belongs to another hospital")
+    return driver
+
+
 @router.post("")
 async def create_amb(
     body: AmbulanceIn, db=Depends(get_db), user=Depends(require_any("ADMIN", "HOSPITAL"))
@@ -47,15 +64,13 @@ async def create_amb(
         # hospital owners can only register ambulances for their own hospital
         if hospital_id and hospital_id != user.hospital_id:
             raise Forbidden("Not your hospital")
+        if user.hospital_id is None:
+            raise Forbidden("Hospital account has no hospital scope")
         hospital_id = user.hospital_id
     elif hospital_id:
         await _require_hospital(db, hospital_id)
     if body.driver_id is not None:
-        driver = (
-            await db.execute(select(User).where(User.id == body.driver_id))
-        ).scalar_one_or_none()
-        if not driver:
-            raise NotFound("Driver not found")
+        await _require_driver(db, body.driver_id, hospital_id)
         clash = (
             await db.execute(
                 select(Ambulance).where(Ambulance.driver_id == body.driver_id)
@@ -133,10 +148,12 @@ async def my_ambulance(db=Depends(get_db), user=Depends(get_current_user)):
 
 
 @router.get("/{aid}")
-async def get_amb(aid: str, db=Depends(get_db), _=Depends(require_any("ADMIN", "DRIVER"))):
-    a = await get_ambulance(db, uuid.UUID(aid))
+async def get_amb(aid: uuid.UUID, db=Depends(get_db), user=Depends(require_any("ADMIN", "DRIVER"))):
+    a = await get_ambulance(db, aid)
     if not a:
         raise NotFound("Ambulance not found")
+    if str(user.role).lower() == "driver" and a.driver_id != user.id:
+        raise Forbidden("Not your ambulance")
     return {"success": True, "data": _amb_out(a)}
 
 
@@ -158,12 +175,11 @@ async def update_ambulance(
             raise Forbidden("Not your hospital's ambulance")
         if body.hospital_id and body.hospital_id != scope:
             raise Forbidden("Cannot move an ambulance to another hospital")
+    final_hospital_id = (
+        body.hospital_id if "hospital_id" in body.model_fields_set else a.hospital_id
+    )
     if body.driver_id is not None:
-        driver = (
-            await db.execute(select(User).where(User.id == body.driver_id))
-        ).scalar_one_or_none()
-        if not driver:
-            raise NotFound("Driver not found")
+        await _require_driver(db, body.driver_id, final_hospital_id)
         clash = (
             await db.execute(
                 select(Ambulance).where(
@@ -174,16 +190,21 @@ async def update_ambulance(
         if clash:
             raise Conflict("Driver is already assigned to another ambulance")
     changes: dict = {}
-    previous = str(a.driver_id) if a.driver_id else None
-    new_driver = str(body.driver_id) if body.driver_id else None
-    if new_driver != previous:
-        changes["driver_id"] = new_driver
-        changes["previous_driver_id"] = previous
-    a.driver_id = body.driver_id
-    if body.hospital_id and body.hospital_id != a.hospital_id:
-        await _require_hospital(db, body.hospital_id)
+    fields = body.model_fields_set
+    if "driver_id" in fields:
+        previous = str(a.driver_id) if a.driver_id else None
+        new_driver = str(body.driver_id) if body.driver_id else None
+        if new_driver != previous:
+            changes["driver_id"] = new_driver
+            changes["previous_driver_id"] = previous
+        a.driver_id = body.driver_id
+    if "hospital_id" in fields and body.hospital_id != a.hospital_id:
+        if body.hospital_id is not None:
+            await _require_hospital(db, body.hospital_id)
         changes["hospital_id"] = str(body.hospital_id)
         a.hospital_id = body.hospital_id
+        if a.driver_id is not None:
+            await _require_driver(db, a.driver_id, a.hospital_id)
     if body.on_duty is not None and body.on_duty != a.is_active:
         changes["on_duty"] = body.on_duty
         a.is_active = body.on_duty

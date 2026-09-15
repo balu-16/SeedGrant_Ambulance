@@ -154,13 +154,14 @@ async def test_vision_device_key_ingest(client, admin, driver, junction, device,
     )
     assert r.status_code == 403, r.text
 
-    # user-token path keeps working (no junction/session metadata)
+    # driver bearer tokens cannot inject traffic detections; Pi/device keys
+    # (or an explicitly authorized admin) are the only ingest paths.
     r = await client.post(
         "/api/v1/vision/detections",
         json=[{"vehicle_class": "truck", "confidence": 0.5}],
         headers=driver["headers"],
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 403, r.text
 
 
 async def test_patch_junction_and_deactivate_releases_commands(
@@ -173,7 +174,7 @@ async def test_patch_junction_and_deactivate_releases_commands(
     )
     assert r.status_code == 200, r.text
 
-    await insert_priority_command(db_factory, uuid.UUID(junction["id"]))
+    priority = await insert_priority_command(db_factory, uuid.UUID(junction["id"]))
     r = await client.patch(
         f"/api/v1/junctions/{junction['id']}",
         json={"is_active": False},
@@ -182,12 +183,30 @@ async def test_patch_junction_and_deactivate_releases_commands(
     assert r.status_code == 200, r.text
     assert r.json()["data"]["is_active"] is False
 
-    from app.models.emergency import EmergencyCommand
+    from app.models.emergency import EmergencyCommand, EmergencySession
 
     async with db_factory() as s:
         cmds = (await s.execute(select(EmergencyCommand))).scalars().all()
         assert cmds
-        assert all(c.status == "EXPIRED" for c in cmds)
+        # Original priority rows are RELEASED (terminal) — EXPIRED would be
+        # re-armed by the GPS pipeline toward the dead junction.  The new
+        # RELEASE_PRIORITY row remains deliverable to the device.
+        assert all(
+            c.status == "RELEASED"
+            for c in cmds
+            if c.command_type == "PRIORITY_REQUEST"
+        )
+        assert any(
+            c.command_type == "RELEASE_PRIORITY" and c.status == "SENT"
+            for c in cmds
+        )
+        session = (
+            await s.execute(
+                select(EmergencySession).where(EmergencySession.id == priority.session_id)
+            )
+        ).scalar_one()
+        assert session.status == "CANCELLED"
+        assert session.ended_reason == "JUNCTION_DEACTIVATED"
 
     # non-admin rejected
     r = await client.patch(
@@ -227,7 +246,7 @@ async def test_command_log_since_until(client, admin, db_factory):
     assert r.status_code == 200 and r.json()["data"], r.text
     created = r.json()["data"][0]["created_at"]
 
-    from datetime import UTC, datetime, timedelta
+    from datetime import datetime, timedelta
 
     ts = datetime.fromisoformat(created)
     r = await client.get(
@@ -240,7 +259,7 @@ async def test_command_log_since_until(client, admin, db_factory):
     )
     assert len(r.json()["data"]) >= 1
     r = await client.get(
-        f"/api/v1/commands/admin/list?until=2000-01-01T00:00:00Z",
+        "/api/v1/commands/admin/list?until=2000-01-01T00:00:00Z",
         headers=admin["headers"],
     )
     assert r.json()["data"] == []

@@ -43,11 +43,19 @@ class EmergencySession(Base):
             postgresql_where=text(f"status IN ({_ACTIVE_STATUS_SQL})"),
             sqlite_where=text(f"status IN ({_ACTIVE_STATUS_SQL})"),
         ),
+        # driver history lookup (driver_id, status, started_at) — mirrors
+        # alembic 0003 ix_sessions_driver_status_started so create_all == live
+        Index("ix_sessions_driver_status_started", "driver_id", "status", "started_at"),
     )
 
 
 class GpsPoint(Base):
     __tablename__ = "gps_points"
+    __table_args__ = (
+        # per-session time ordering — mirrors alembic 0003
+        # ix_gps_session_recorded so create_all == live
+        Index("ix_gps_session_recorded", "session_id", "recorded_at"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("emergency_sessions.id", ondelete="CASCADE"), index=True

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from app.core.dependencies import get_current_user, get_db
+from app.core.dependencies import get_current_user, get_db, require_role
 from app.core.exceptions import AppError, Conflict, Unauthorized
 from app.core.security import (
     create_access_token,
@@ -187,7 +187,7 @@ async def _get_or_create_profile(db, user) -> DriverProfile:
 
 
 @router.get("/profile")
-async def get_profile(db=Depends(get_db), user=Depends(get_current_user)):
+async def get_profile(db=Depends(get_db), user=Depends(require_role("DRIVER"))):
     """Driver-editable profile (lives in driver_profiles, not users)."""
     from sqlalchemy import select
 
@@ -205,7 +205,7 @@ async def get_profile(db=Depends(get_db), user=Depends(get_current_user)):
 
 @router.patch("/profile")
 async def update_profile(
-    body: ProfileIn, db=Depends(get_db), user=Depends(get_current_user)
+    body: ProfileIn, db=Depends(get_db), user=Depends(require_role("DRIVER"))
 ):
     p = await _get_or_create_profile(db, user)
     p.name = body.name

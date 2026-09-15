@@ -9,9 +9,7 @@ export const authService: AuthService = {
   async signIn(identifier, password) {
     const id = identifier.trim();
     if (!id || !password) {
-      throw new Error(
-        "Incorrect driver ID/email or password. Please try again.",
-      );
+      throw new Error("Incorrect driver email or password. Please try again.");
     }
     if (!isApiEnabled()) {
       throw new Error(
@@ -21,37 +19,54 @@ export const authService: AuthService = {
     try {
       const login = await apiLogin(id, password);
       const role = (login.user?.role ?? "").trim().toLowerCase();
-      if (role && role !== "driver") {
+      if (role !== "driver") {
         await clearTokens();
-        throw new Error("This account is not a driver account. Please try again.");
+        throw new Error(
+          "This account is not a driver account. Please try again.",
+        );
       }
       try {
         const me = await apiMe();
         const meRole = (me.role ?? "").trim().toLowerCase();
-        if (meRole && meRole !== "driver") {
+        if (meRole !== "driver") {
           await clearTokens();
-          throw new Error("This account is not a driver account. Please try again.");
+          throw new Error(
+            "This account is not a driver account. Please try again.",
+          );
         }
         return { driverId: me.id, signedInAt: Date.now() };
       } catch (e) {
-        if (e instanceof Error && e.message.includes("not a driver account")) throw e;
-        return { driverId: id, signedInAt: Date.now() };
+        // Login tokens are not trusted until the identity endpoint confirms
+        // the same active driver account.  Do not enter the app on a partial
+        // or unavailable /me response.
+        await clearTokens();
+        throw e;
       }
     } catch (e) {
-      if (e instanceof Error && e.message.includes("not a driver account")) throw e;
-      if (e instanceof ApiError && e.code === "NETWORK_ERROR") {
+      // Keep error handling stable in web bundles where duplicate module
+      // instances can make `instanceof ApiError` unreliable.
+      const apiError =
+        e instanceof ApiError ||
+        (typeof e === "object" &&
+          e !== null &&
+          "code" in e &&
+          typeof (e as { code?: unknown }).code === "string");
+      const errorCode = apiError ? (e as ApiError).code : "";
+      const errorStatus = apiError ? (e as ApiError).status : 0;
+      if (e instanceof Error && e.message.includes("not a driver account"))
+        throw e;
+      if (apiError && errorCode === "NETWORK_ERROR") {
         throw new Error("Backend unreachable. Check connection and retry.");
       }
-      if (
-        e instanceof ApiError &&
-        (e.code === "UNAUTHORIZED" || e.status === 401)
-      ) {
+      if (apiError && (errorCode === "UNAUTHORIZED" || errorStatus === 401)) {
         throw new Error(
-          "Incorrect driver ID/email or password. Please try again.",
+          "Incorrect driver email or password. Please try again.",
         );
       }
-      if (e instanceof ApiError && e.message) {
-        throw new Error(`${e.message} (code ${e.status || e.code}). Please try again.`);
+      if (apiError && e instanceof Error && e.message) {
+        throw new Error(
+          `${e.message} (code ${errorStatus || errorCode}). Please try again.`,
+        );
       }
       throw new Error("Login failed. Please try again.");
     }

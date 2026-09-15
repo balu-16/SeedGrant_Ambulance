@@ -16,9 +16,15 @@ router = APIRouter(prefix="/hospitals", tags=["hospitals"])
 
 @router.get("")
 async def list_hospitals(
-    db=Depends(get_db), _=Depends(require_role("ADMIN", "DRIVER", "POLICE", "HOSPITAL"))
+    db=Depends(get_db), user=Depends(require_role("ADMIN", "DRIVER", "POLICE", "HOSPITAL"))
 ):
-    rows = ((await db.execute(select(Hospital).order_by(Hospital.name))).scalars().all())
+    q = select(Hospital).order_by(Hospital.name)
+    if str(user.role).lower() == "hospital":
+        scope = hospital_scope(user)
+        if scope is None:
+            return {"success": True, "data": []}
+        q = q.where(Hospital.id == scope)
+    rows = ((await db.execute(q)).scalars().all())
     return {
         "success": True,
         "data": [
@@ -78,8 +84,12 @@ async def update_my_hospital(
 async def get_hospital(
     hid: uuid.UUID,
     db=Depends(get_db),
-    _=Depends(require_role("ADMIN", "DRIVER", "POLICE", "HOSPITAL")),
+    user=Depends(require_role("ADMIN", "DRIVER", "POLICE", "HOSPITAL")),
 ):
+    if str(user.role).lower() == "hospital":
+        scope = hospital_scope(user)
+        if scope is None or hid != scope:
+            raise Forbidden("Not your hospital")
     h = (await db.execute(select(Hospital).where(Hospital.id == hid))).scalar_one_or_none()
     if not h:
         raise NotFound("Hospital not found")

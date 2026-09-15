@@ -1,0 +1,50 @@
+# Keep the root Render Docker context small and prevent local secrets/assets
+# from being sent to the Docker daemon. The backend image copies only server/.
+.git/
+.github/
+node_modules/
+**/node_modules/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+**/.pytest_cache/
+.ruff_cache/
+**/.ruff_cache/
+.mypy_cache/
+**/.mypy_cache/
+.expo/
+**/.expo/
+dist/
+**/dist/
+build/
+**/build/
+test-results/
+**/test-results/
+playwright-report/
+**/playwright-report/
+.vercel/
+**/.vercel/
+
+# Environment files and credentials
+.env
+**/.env
+.env.*
+**/.env.*
+!**/.env.example
+!**/*.env.example
+**/google-services.json
+**/*firebase-adminsdk*.json
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+
+# Raspberry Pi model binaries are deployed separately, never in the backend image.
+*.pt
+**/*.pt
+*.onnx
+**/*.onnx

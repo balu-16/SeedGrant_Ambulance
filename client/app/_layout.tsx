@@ -7,7 +7,7 @@ import { AppProvider } from "@/store/AppProvider";
 import { useApp } from "@/hooks/useApp";
 import { Button, Txt } from "@/components/ui";
 import { colors as c } from "@/constants/theme";
-import { getTokens, isApiEnabled } from "@/services/api";
+import { getTokens, isApiEnabled, apiMe, clearTokens } from "@/services/api";
 import {
   addNotificationListeners,
   configureNotifications,
@@ -105,9 +105,43 @@ export function ErrorBoundary({
   );
 }
 function Navigation() {
-  const { state, hydrated, storageError, retryStorage, resetLocalData } =
-    useApp();
+  const {
+    state,
+    hydrated,
+    storageError,
+    retryStorage,
+    resetLocalData,
+    dispatch,
+  } = useApp();
   usePushSetup();
+  // Validate the restored session against the backend once after hydration:
+  // stale/revoked tokens must land on login, not on home with 401s mid-use.
+  useEffect(() => {
+    if (!hydrated || !state.auth) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        if (!(await isApiEnabled())) return;
+        const tokens = await getTokens();
+        if (!tokens) return;
+        await apiMe();
+      } catch (e) {
+        if (cancelled) return;
+        const code = (e as { code?: string })?.code;
+        if (code === "UNAUTHORIZED") {
+          try {
+            await clearTokens();
+          } catch {
+            /* ignore */
+          }
+          dispatch({ type: "logout", now: Date.now() });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, state.auth, dispatch]);
   // No backend URL configured → this build cannot do anything real. Show a
   // plain "not found"-style screen instead of any offline/demo behavior.
   if (!isApiEnabled()) {
@@ -125,9 +159,9 @@ function Navigation() {
         <Txt style={{ fontSize: 28, fontWeight: "700" }}>404</Txt>
         <Txt accessibilityRole="alert">App not configured</Txt>
         <Txt muted style={{ textAlign: "center" }}>
-          This build is missing its backend URL (EXPO_PUBLIC_API_URL) and
-          cannot reach the SeedGrant control center. Install a configured
-          build to continue.
+          This build is missing its backend URL (EXPO_PUBLIC_API_URL) and cannot
+          reach the SeedGrant control center. Install a configured build to
+          continue.
         </Txt>
       </SafeAreaView>
     );
@@ -148,9 +182,7 @@ function Navigation() {
           <>
             <Txt>{storageError}</Txt>
             <Button title="Retry" onPress={retryStorage} />
-            <Txt muted>
-              Resetting clears saved sessions and profile edits.
-            </Txt>
+            <Txt muted>Resetting clears saved sessions and profile edits.</Txt>
             <Button
               title="Reset Local Data"
               tone="quiet"

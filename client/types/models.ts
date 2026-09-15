@@ -44,11 +44,13 @@ export interface PriorityEvent {
 }
 export interface EmergencySession {
   id: string;
+  /** Backend session id when this local row mirrors a server session. */
+  backendSessionId?: string;
   startedAt: number;
   endedAt?: number;
   hospital: string;
   distanceKm: number;
-  status: "active" | "completed" | "cancelled";
+  status: "active" | "completed" | "cancelled" | "timed_out";
   junctionsCrossed: number;
   events: PriorityEvent[];
   priority: "standby" | "requested" | "granted" | "released";

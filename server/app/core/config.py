@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     SYNC_DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/trafficdb"
 
     JWT_SECRET: str = "dev-only-change-me-tomorrow"
+    # Deprecated: token algorithm is hardcoded to HS256 in core/security.py.
+    # Kept for backwards-compat so old .env files still parse; setting it to
+    # anything else (e.g. "none") has no effect.
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -125,4 +128,11 @@ def validate_startup_config() -> list[str]:
         warnings.append("MQTT broker URL is not TLS (mqtts://) — commands go in cleartext")
     if not s.SUPABASE_URL:
         warnings.append("SUPABASE_URL empty — REST features disabled, direct Postgres only")
+    for o in s.cors_origins_list:
+        if o == "*" or o.lower() == "null" or o.endswith("/"):
+            warnings.append(
+                f"CORS_ORIGINS entry looks unsafe: {o!r} (no '*', 'null', trailing '/')"
+            )
+    if s.JWT_ALGORITHM != "HS256":
+        warnings.append("JWT_ALGORITHM is ignored (HS256 is hardcoded) — remove it from .env")
     return warnings

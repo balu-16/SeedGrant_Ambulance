@@ -9,6 +9,7 @@ from app.core.dependencies import get_current_user, get_db
 from app.core.exceptions import AppError, Conflict, Forbidden, NotFound
 from app.models.device import AuditLog
 from app.models.emergency import EmergencyCommand, GpsPoint
+from app.models.user import User
 from app.repositories.user_repo import get_ambulance
 from app.schemas.common import GpsIn, StartEmergencyIn
 from app.services import emergency_service as emg
@@ -46,9 +47,20 @@ async def start(body: StartEmergencyIn, db=Depends(get_db), user=Depends(get_cur
     amb = await get_ambulance(db, body.ambulance_id)
     if not amb:
         raise NotFound("Ambulance not found")
-    if str(user.role).lower() == "admin":
-        pass  # ops override: admin may start on any ambulance
-    elif str(user.role).lower() != "driver" or amb.driver_id != user.id:
+    if not amb.is_active:
+        raise Conflict("Ambulance is off duty")
+    role = str(user.role).lower()
+    if role == "admin":
+        # Admins operate on behalf of the assigned driver; an unassigned
+        # vehicle cannot produce an actionable driver-owned session.
+        if not amb.driver_id:
+            raise Forbidden("Ambulance must have an assigned driver")
+        driver = (
+            await db.execute(select(User).where(User.id == amb.driver_id))
+        ).scalar_one_or_none()
+        if not driver or str(driver.role).lower() != "driver" or not driver.is_active:
+            raise Forbidden("Ambulance driver is not active")
+    elif role != "driver" or amb.driver_id != user.id:
         # PORTAL roles cannot start emergencies; a driver only on their own
         # assigned ambulance (an unassigned ambulance matches no driver)
         raise Forbidden("Only the assigned driver can start an emergency")
@@ -73,7 +85,16 @@ async def start(body: StartEmergencyIn, db=Depends(get_db), user=Depends(get_cur
         f"Ambulance {amb.vehicle_no} emergency started.",
         event_key="session_started",
     )
-    return {"success": True, "data": {"session_id": str(s.id), "status": s.status}}
+    return {
+        "success": True,
+        "data": {
+            "session_id": str(s.id),
+            "status": s.status,
+            "ambulance_id": str(s.ambulance_id),
+            "driver_id": str(s.driver_id),
+            "started_by": str(user.id),
+        },
+    }
 
 
 @router.post("/{sid}/gps")
@@ -85,6 +106,13 @@ async def gps(sid: uuid.UUID, body: GpsIn, db=Depends(get_db), user=Depends(get_
 
     _prev_status = s.status
     if emg.apply_timeouts(s):
+        releases = await emg.release_session_commands(db, s.id)
+        await db.commit()
+        # The lazy sweeper may have been interval-gated, so this request can
+        # discover the timeout itself.  Timeout discovery must use the same
+        # release path as an explicit stop; otherwise an already-held signal
+        # could survive a timed-out session.
+        await emg.publish_release_commands(releases)
         await db.commit()
         # Inline flip (sweeper was interval-gated): tell the driver, once —
         # skip when the session was already TIMED_OUT (sweeper notified).
@@ -182,6 +210,7 @@ async def gps(sid: uuid.UUID, body: GpsIn, db=Depends(get_db), user=Depends(get_
             if cmd
             else None,
             "status": s.status,
+            "should_publish": bool(out.get("should_publish")),
         },
     }
 
@@ -202,9 +231,47 @@ async def current(db=Depends(get_db), user=Depends(get_current_user)):
     )
     s = (await db.execute(q)).scalar_one_or_none()
     if not s:
-        return {"success": True, "data": {"active": False}}
+        latest = (
+            await db.execute(
+                select(emg.EmergencySession)
+                .where(emg.EmergencySession.driver_id == user.id)
+                .order_by(desc(emg.EmergencySession.started_at))
+                .limit(1)
+        )
+        ).scalar_one_or_none()
+        if not latest:
+            return {"success": True, "data": {"active": False}}
+        pending_release = (
+            await db.execute(
+                select(EmergencyCommand.id)
+                .where(
+                    EmergencyCommand.session_id == latest.id,
+                    EmergencyCommand.command_type == "RELEASE_PRIORITY",
+                    EmergencyCommand.status == "PENDING",
+                )
+                .limit(1)
+            )
+        ).first() is not None
+        await db.commit()
+        return {
+            "success": True,
+            "data": {
+                "active": False,
+                "session_id": str(latest.id),
+                "status": latest.status,
+                "ambulance_id": str(latest.ambulance_id),
+                "driver_id": str(latest.driver_id),
+                "hospital": latest.hospital,
+                "release_sent": not pending_release,
+                "release_pending": pending_release,
+            },
+        }
     _was_active = s.status in ACTIVE_SESSION_STATUSES
+    release_sent = True
     if emg.apply_timeouts(s) and _was_active:
+        releases = await emg.release_session_commands(db, s.id)
+        await db.commit()
+        release_sent = await emg.publish_release_commands(releases)
         from app.integrations.notify import resolve_player_ids, schedule_push
 
         try:
@@ -226,6 +293,11 @@ async def current(db=Depends(get_db), user=Depends(get_current_user)):
             "active": s.status in ACTIVE_SESSION_STATUSES,
             "session_id": str(s.id),
             "status": s.status,
+            "ambulance_id": str(s.ambulance_id),
+            "driver_id": str(s.driver_id),
+            "hospital": s.hospital,
+            "release_sent": release_sent,
+            "release_pending": not release_sent,
         },
     }
 
@@ -233,6 +305,8 @@ async def current(db=Depends(get_db), user=Depends(get_current_user)):
 @router.post("/{sid}/stop")
 async def stop(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_user)):
     s = await emg.get_session(db, sid, for_update=True)
+    emg.ensure_owner(s, user)
+    releases = await emg.release_session_commands(db, s.id)
     s = await emg.stop_session(db, s, user)
     db.add(
         AuditLog(
@@ -243,6 +317,8 @@ async def stop(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_user
         )
     )
     await db.commit()
+    release_sent = await emg.publish_release_commands(releases)
+    await db.commit()
     from app.integrations.notify import notify_user
 
     await notify_user(
@@ -252,13 +328,22 @@ async def stop(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_user
         f"Session {s.id} {s.status.lower()}.",
         event_key="session_ended",
     )
-    return {"success": True, "data": {"status": s.status}}
+    return {
+        "success": True,
+        "data": {
+            "status": s.status,
+            "release_sent": release_sent,
+            "release_pending": not release_sent,
+        },
+    }
 
 
 @router.post("/{sid}/cancel")
 async def cancel(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_user)):
     """Cancel an active emergency (driver pressed cancel / false alarm)."""
     s = await emg.get_session(db, sid, for_update=True)
+    emg.ensure_owner(s, user)
+    releases = await emg.release_session_commands(db, s.id)
     s = await emg.stop_session(db, s, user, status="CANCELLED")
     db.add(
         AuditLog(
@@ -269,20 +354,24 @@ async def cancel(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_us
         )
     )
     await db.commit()
+    release_sent = await emg.publish_release_commands(releases)
+    await db.commit()
     from app.integrations.notify import notify_user
 
     await notify_user(db, s.driver_id, "Emergency cancelled", f"Session {s.id} cancelled.")
-    return {"success": True, "data": {"status": s.status}}
+    return {
+        "success": True,
+        "data": {
+            "status": s.status,
+            "release_sent": release_sent,
+            "release_pending": not release_sent,
+        },
+    }
 
 
 @router.post("/{sid}/heartbeat")
 async def heartbeat(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_user)):
-    """Keep-alive without a GPS fix — resets the inactivity timer.
-
-    Used when the driver is stationary (or GPS is weak) so a live session
-    is not TIMED_OUT while the app is still in the foreground/background task.
-    """
-    from datetime import UTC, datetime
+    """Check session connectivity without fabricating GPS freshness."""
 
     s = await emg.get_session(db, sid, for_update=True)
     emg.ensure_owner(s, user)
@@ -290,7 +379,6 @@ async def heartbeat(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current
 
     if s.status not in _ACTIVE:
         raise Conflict(f"Session {s.status} not accepting heartbeat")
-    s.last_gps_at = datetime.now(UTC)
     await db.commit()
     return {"success": True, "data": {"status": s.status}}
 
@@ -300,6 +388,9 @@ class PatientIn(BaseModel):
     severity: str | None = None
 
 
+_ALLOWED_SEVERITIES = {"stable", "urgent", "critical"}
+
+
 @router.post("/{sid}/patient")
 async def patient(
     sid: uuid.UUID, body: PatientIn, db=Depends(get_db), user=Depends(get_current_user)
@@ -307,6 +398,13 @@ async def patient(
     """Free-text patient handoff stored on the audit trail (no PHI schema yet)."""
     s = await emg.get_session(db, sid, for_update=True)
     emg.ensure_owner(s, user)
+    severity = (body.severity or "").strip().lower() or None
+    if severity is not None and severity not in _ALLOWED_SEVERITIES:
+        raise AppError(
+            "severity must be one of: stable, urgent, critical",
+            code="VALIDATION_ERROR",
+            status_code=422,
+        )
     db.add(
         AuditLog(
             actor=str(user.id),
@@ -315,7 +413,7 @@ async def patient(
             detail={
                 "session_id": str(s.id),
                 "notes": (body.notes or "")[:2000],
-                "severity": body.severity,
+                "severity": severity,
             },
         )
     )
@@ -376,7 +474,7 @@ async def timeline(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_
                     "kind": "audit",
                     "type": a.action,
                     "status": None,
-                    "at": None,
+                    "at": a.created_at.isoformat() if a.created_at else None,
                 }
             )
     return {"success": True, "data": {"session_id": str(s.id), "items": items}}
@@ -409,7 +507,11 @@ async def history(
                 _f = _f.replace(tzinfo=_UTC)
             stmt = stmt.where(emg.EmergencySession.started_at >= _f)
         except Exception:
-            pass
+            raise AppError(
+                "Invalid 'from' datetime (expected ISO 8601)",
+                code="VALIDATION_ERROR",
+                status_code=422,
+            ) from None
     if to:
         try:
             from datetime import UTC as _UTC2
@@ -420,7 +522,11 @@ async def history(
                 _t = _t.replace(tzinfo=_UTC2)
             stmt = stmt.where(emg.EmergencySession.started_at <= _t)
         except Exception:
-            pass
+            raise AppError(
+                "Invalid 'to' datetime (expected ISO 8601)",
+                code="VALIDATION_ERROR",
+                status_code=422,
+            ) from None
     rows = (
         (
             await db.execute(

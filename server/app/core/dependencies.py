@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import uuid
+from collections.abc import AsyncGenerator
 
 from fastapi import Depends, Header
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -16,7 +17,7 @@ from app.models.junction import PoliceAssignment
 _bearer = HTTPBearer(auto_error=False)
 
 
-async def get_db() -> AsyncSession:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async for s in get_session():
         yield s
 
@@ -111,6 +112,14 @@ async def user_or_device(
     key: str = Header(default="", alias="X-Device-Api-Key"),
 ):
     """Accept EITHER a valid user bearer token (any role) OR a valid device API key."""
+    from app.core.exceptions import Conflict
+    from app.core.logging import get_logger as _get_logger
+
+    if key and creds is not None and creds.credentials:
+        # Both credentials present: ambiguous — fail loudly instead of
+        # silently preferring the device (confused-deputy risk).
+        _get_logger("auth").warning("both_bearer_and_device_key_present")
+        raise Conflict("Provide either a bearer token or a device API key, not both")
     if key:
         return await device_from_key(db=db, key=key)
     if creds is not None and creds.credentials:

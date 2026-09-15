@@ -16,6 +16,11 @@ export { apiMyAmbulance } from "./api";
 export interface BackendSession {
   session_id: string;
   status: string;
+  ambulance_id?: string;
+  driver_id?: string;
+  hospital?: string | null;
+  release_sent?: boolean;
+  release_pending?: boolean;
 }
 
 export interface NearbyJunction {
@@ -30,6 +35,7 @@ export interface BackendGpsResult {
   command: { id: string; type: string; approach: string } | null;
   status: string;
   duplicate?: boolean;
+  should_publish?: boolean;
 }
 
 /** One timeline row from GET /emergencies/history (server-built). */
@@ -83,13 +89,15 @@ let activeBackendSessionId: string | null = null;
  * stop request fails (the error is logged, never thrown) — the session id
  * stays tracked on failure so a later logout/unmount can retry.
  */
-export async function stopActiveBackendSession(): Promise<void> {
+export async function stopActiveBackendSession(): Promise<boolean> {
   const sessionId = activeBackendSessionId;
-  if (!sessionId) return;
+  if (!sessionId) return true;
   try {
-    await backendStop(sessionId);
+    const result = await backendStop(sessionId);
+    return result.release_pending !== true;
   } catch (e) {
     console.warn("[emergency] failed to stop backend emergency session:", e);
+    return false;
   }
 }
 
@@ -121,25 +129,56 @@ export async function backendStart(
 }
 
 export async function backendCurrent(): Promise<
-  { active: false } | { active: boolean; session_id: string; status: string }
+  | {
+      active: false;
+      session_id?: string;
+      status?: string;
+      release_sent?: boolean;
+      release_pending?: boolean;
+    }
+  | {
+      active: boolean;
+      session_id: string;
+      status: string;
+      ambulance_id?: string;
+      driver_id?: string;
+      hospital?: string | null;
+      release_sent?: boolean;
+      release_pending?: boolean;
+    }
 > {
   const current = await request<
-    { active: false } | { active: boolean; session_id: string; status: string }
+    | { active: false }
+    | {
+        active: boolean;
+        session_id: string;
+        status: string;
+        ambulance_id?: string;
+        driver_id?: string;
+        hospital?: string | null;
+        release_sent?: boolean;
+        release_pending?: boolean;
+      }
   >("/emergencies/current");
   activeBackendSessionId = current.active ? current.session_id : null;
   return current;
 }
 
-export async function backendStop(
-  sessionId: string,
-): Promise<{ status: string }> {
-  const result = await request<{ status: string }>(
-    `/emergencies/${sessionId}/stop`,
-    { method: "POST" },
-  );
+export async function backendStop(sessionId: string): Promise<{
+  status: string;
+  release_sent?: boolean;
+  release_pending?: boolean;
+}> {
+  const result = await request<{
+    status: string;
+    release_sent?: boolean;
+    release_pending?: boolean;
+  }>(`/emergencies/${sessionId}/stop`, { method: "POST" });
   // Clear the tracker only once the server actually ended the session; a
   // failed stop must leave it tracked so cleanup paths can retry.
-  if (activeBackendSessionId === sessionId) activeBackendSessionId = null;
+  if (activeBackendSessionId === sessionId && result.release_pending !== true) {
+    activeBackendSessionId = null;
+  }
   return result;
 }
 
@@ -149,6 +188,7 @@ export interface GpsFixInput {
   accuracy?: number | null;
   speed?: number | null;
   heading?: number | null;
+  timestamp: number;
 }
 
 export async function backendGps(
@@ -158,6 +198,7 @@ export async function backendGps(
   const body: Record<string, unknown> = {
     latitude: fix.latitude,
     longitude: fix.longitude,
+    timestamp: new Date(fix.timestamp).toISOString(),
   };
   if (fix.accuracy != null) body.accuracy = fix.accuracy;
   if (fix.speed != null && fix.speed >= 0) body.speed = fix.speed;
@@ -252,7 +293,8 @@ export function mapHistoryItem(item: BackendHistoryItem): EmergencySession {
       if (e.type === "PRIORITY_REQUEST") {
         events.push({
           id: e.id,
-          kind: normStatus(e.status) === "ACKNOWLEDGED" ? "granted" : "requested",
+          kind:
+            normStatus(e.status) === "ACKNOWLEDGED" ? "granted" : "requested",
           timestamp,
           approach: e.approach ?? undefined,
         });
@@ -263,6 +305,7 @@ export function mapHistoryItem(item: BackendHistoryItem): EmergencySession {
   }
   return {
     id: `backend-${item.id}`,
+    backendSessionId: item.id,
     startedAt,
     endedAt: terminal
       ? Number.isFinite(parsedEndedAt)
@@ -277,9 +320,11 @@ export function mapHistoryItem(item: BackendHistoryItem): EmergencySession {
     status:
       normStatus(item.status) === "COMPLETED"
         ? "completed"
-        : normStatus(item.status) === "CANCELLED" || normStatus(item.status) === "TIMED_OUT"
+        : normStatus(item.status) === "CANCELLED"
           ? "cancelled"
-          : "active",
+          : normStatus(item.status) === "TIMED_OUT"
+            ? "timed_out"
+            : "active",
     junctionsCrossed:
       typeof item.junctions_crossed === "number" ? item.junctions_crossed : 0,
     events,

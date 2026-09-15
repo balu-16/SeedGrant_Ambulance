@@ -47,6 +47,16 @@ class MqttClientBase(ABC):
         """Register the inbound-message callback (topic, payload dict)."""
         self._message_handler = handler
 
+    @abstractmethod
+    def start_background_loop(self) -> None:
+        """Start broker supervision; the in-memory client may no-op."""
+        pass
+
+    @abstractmethod
+    def stop_background_loop(self) -> None:
+        """Stop broker supervision; the in-memory client may no-op."""
+        pass
+
 
 class MockMqttClient(MqttClientBase):
     """In-memory broker: logs + stores messages so tests assert without network."""
@@ -164,7 +174,7 @@ class RealMqttClient(MqttClientBase):
                 )
             self._outbox.append(PublishedMessage(topic, payload))
             log.warning("mqtt_offline_queued", topic=topic, queued=len(self._outbox))
-            return
+            raise RuntimeError("MQTT offline; command queued for retry")
         await self._client.publish(topic, json.dumps(payload).encode(), qos=get_settings().MQTT_QOS)
 
     async def subscribe(self, topic: str) -> None:

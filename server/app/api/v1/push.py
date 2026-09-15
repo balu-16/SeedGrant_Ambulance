@@ -37,8 +37,9 @@ async def register_push(body: PushRegisterIn, db=Depends(get_db), user=Depends(g
     now = datetime.now(UTC)
     if existing:
         if existing.user_id != user.id:
-            # token is bound to another account — never re-bind (hijack guard)
-            raise Conflict("Push token already registered")
+            # token is bound to another account — generic message avoids
+            # confirming token existence across accounts.
+            raise Conflict("Unable to register push token")
         # same user re-registering: idempotent refresh of device metadata
         existing.expo_push_token = expo_token
         existing.device_type = body.device_type
@@ -60,7 +61,7 @@ async def register_push(body: PushRegisterIn, db=Depends(get_db), user=Depends(g
     except IntegrityError:
         # concurrent registration of the same token lost the unique race
         await db.rollback()
-        raise Conflict("Push token already registered") from None
+        raise Conflict("Unable to register push token") from None
     return {"success": True, "data": {"registered": True, "player_id": token}}
 
 

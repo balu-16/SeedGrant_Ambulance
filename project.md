@@ -4,7 +4,7 @@
 
 The project is a prototype **Edge-AI Based Adaptive Traffic Management System with Intelligent Ambulance Priority** for a single four-way junction. It replaces fixed traffic-light timing with dynamic timing driven by real traffic density, and gives priority to ambulances using live GPS reported by a driver mobile app — not siren or camera-based ambulance detection.
 
-Four fixed 1080p cameras, one per road approach, all feed a single **Raspberry Pi 5 (8 GB RAM)**, which acts as the real-time edge controller. All normal traffic decisions happen locally on the Pi and do not depend on the cloud. AWS is used only for centralized tasks such as authentication, ambulance-driver management, GPS tracking, junction and device registration, historical traffic data, analytics, dashboard data, and emergency-session coordination.
+Four fixed 1080p cameras, one per road approach, all feed a single **Raspberry Pi 5 (8 GB RAM)**, which acts as the real-time edge controller. All normal traffic decisions happen locally on the Pi and do not depend on the cloud. The deployed cloud backend (currently Render) is used only for centralized tasks such as authentication, ambulance-driver management, GPS tracking, junction and device registration, historical traffic data, analytics, dashboard data, and emergency-session coordination.
 
 ## 2. Problem Statement
 
@@ -15,7 +15,7 @@ Conventional traffic lights usually run fixed timings — for example, giving ev
 
 ## 3. System Architecture
 
-The separation between the edge layer and the cloud layer is a core design principle: the Pi handles **local real-time traffic control**, while AWS handles the **central backend**.
+The separation between the edge layer and the cloud layer is a core design principle: the Pi handles **local real-time traffic control**, while the deployed backend handles the **central cloud services**.
 
 ### 3.1 Edge Layer — Raspberry Pi 5
 
@@ -32,11 +32,11 @@ The Pi runs the full real-time pipeline locally:
 - Telemetry
 - Communication with the backend
 
-Normal traffic decisions are computed entirely on the Pi, so the junction keeps operating even if the internet connection temporarily fails or AWS is offline.
+Normal traffic decisions are computed entirely on the Pi, so the junction keeps operating even if the internet connection temporarily fails or the backend is offline.
 
-### 3.2 Cloud Layer — AWS
+### 3.2 Cloud Layer — Backend (Render prototype deployment)
 
-AWS handles the centralized, non-real-time responsibilities:
+The backend handles the centralized, non-real-time responsibilities:
 
 - Authentication
 - Ambulance-driver management
@@ -109,14 +109,14 @@ The traffic-control algorithm is fully separate from YOLO: YOLO only reports whi
 - Yellow time and safe switching rules
 - Waiting time and fairness across approaches
 
-Green time is **not** simply proportional to vehicle count. All of this runs locally on the Pi, independent of AWS.
+Green time is **not** simply proportional to vehicle count. All of this runs locally on the Pi, independent of the Render backend.
 
 ## 7. Ambulance Priority Pipeline
 
 There is **no siren detection and no camera-based ambulance detection**. Priority is driven entirely by the ambulance driver's mobile app:
 
 1. The driver logs in and starts an emergency in the app.
-2. The app sends **authorized background GPS updates** to the AWS backend.
+2. The app sends **authorized background GPS updates** to the Render backend.
 3. The backend tracks the ambulance, identifies the upcoming (nearest) junction and the approach direction, and sends a valid emergency override command to that junction's Pi.
 4. The Pi safely finishes any required transition, clears conflicting movements, gives green priority to the ambulance side, and temporarily overrides the normal density-based controller.
 5. Once the ambulance passes — or the emergency session times out — the Pi returns to normal adaptive control.
@@ -125,15 +125,15 @@ There is **no siren detection and no camera-based ambulance detection**. Priorit
 
 - **Stack:** React Native + TypeScript, built with an Expo development build.
 - **Features:** driver login, ambulance registration, Start Emergency, Stop Emergency.
-- **Capabilities:** background location updates while emergency mode is active; push notifications via **OneSignal** for Android and iOS. React Native provides the GPS, background-location, and notification capabilities required.
+- **Capabilities:** background location updates while emergency mode is active; push notifications via **Expo Notifications** for Android and iOS. React Native provides the GPS, background-location, and notification capabilities required.
 
 ### 7.2 Future Expansion — Green Corridor
 
-If the system is expanded to multiple junctions, AWS can coordinate several Raspberry Pis to create a moving green corridor for the ambulance.
+If the system is expanded to multiple junctions, the Render backend can coordinate several Raspberry Pis to create a moving green corridor for the ambulance.
 
-## 8. AWS Backend
+## 8. Render Backend
 
-The backend is built with **FastAPI** on **PostgreSQL**, and all data access goes through **SQLAlchemy 2.0 as the ORM**. It implements the cloud responsibilities listed in Section 3.2: authentication, driver and ambulance management, junction and device registration, traffic history, analytics, dashboard data, and emergency-session coordination with command dispatch to the Pis.
+The backend is built with **FastAPI** on **PostgreSQL**, and all data access goes through **SQLAlchemy 2.0 as the ORM**. It implements the cloud responsibilities listed in Section 3.2: authentication, driver and ambulance management, junction and device registration, traffic history, analytics, dashboard data, and emergency-session coordination with command dispatch to the Pis. Render is the prototype deployment target; the database and MQTT broker remain managed external services.
 
 ### 8.1 Data Layer — How the ORM Is Used
 
@@ -172,7 +172,7 @@ The finalized budget is **₹49,000** (SEED grant), covering:
 | Mounts and powered USB hub | With enclosure |
 | Router and network accessories | Junction networking |
 | microSD card (storage) | OS, model, and frame buffers |
-| Cloud services | AWS infrastructure |
+| Cloud services | Render prototype deployment and managed database/broker services |
 | Testing and integration | Includes field testing |
 | Consumables | Miscellaneous |
 | Contingency | — |
@@ -185,7 +185,7 @@ The finalized budget is **₹49,000** (SEED grant), covering:
 
 **Emergency priority:**
 
-> ambulance app GPS → AWS backend → junction and approach identified → emergency command → Raspberry Pi → safe green priority → return to normal adaptive mode
+> ambulance app GPS → backend → junction and approach identified → emergency command → Raspberry Pi → safe green priority → return to normal adaptive mode
 
 **Build sequence:**
 
@@ -196,5 +196,5 @@ The finalized budget is **₹49,000** (SEED grant), covering:
 5. Detect, track, and count vehicles; calculate traffic density.
 6. Dynamically control signal timings.
 7. Build the React Native ambulance app.
-8. Deploy the FastAPI backend on AWS.
-9. Send GPS from the app to AWS → detect the upcoming junction → send the emergency override to the Pi → give ambulance priority → return to normal adaptive control.
+8. Deploy the FastAPI backend on Render for the prototype.
+9. Send GPS from the app to the backend → detect the upcoming junction → send the emergency override to the Pi → give ambulance priority → return to normal adaptive control.

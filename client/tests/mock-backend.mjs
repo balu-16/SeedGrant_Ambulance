@@ -37,6 +37,13 @@ const JUNCTIONS = [
   { id: "jct-1", name: "Trinity Circle", latitude: 12.972, longitude: 77.595 },
   { id: "jct-2", name: "Hosur Road Signal", latitude: 12.97, longitude: 77.6 },
 ];
+const PROFILE = {
+  name: "Ravi Kumar",
+  phone: "+91 90000 00001",
+  region: "Bengaluru",
+  hospital: AMBULANCE.hospital.name,
+  control_center: "Bengaluru Traffic Control",
+};
 
 let accessSeq = 0;
 let refreshSeq = 0;
@@ -90,9 +97,10 @@ const server = http.createServer(async (req, res) => {
 
   // ---- auth ----
   if (path === "/auth/login" && req.method === "POST") {
-    const email = String(body.email ?? "").trim().toLowerCase();
-    const idOk = email === USER.email || email === "driver001";
-    if (!idOk || body.password !== USER.password) {
+    const email = String(body.email ?? "")
+      .trim()
+      .toLowerCase();
+    if (email !== USER.email || body.password !== USER.password) {
       const f = fail(401, "UNAUTHORIZED", "Invalid credentials");
       send(f.status, f.body);
       return;
@@ -122,7 +130,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (path === "/auth/me" && req.method === "GET") {
-    if (!auth) return send(fail(401, "UNAUTHORIZED", "No token").status, fail(401, "UNAUTHORIZED", "No token").body);
+    if (!auth)
+      return send(
+        fail(401, "UNAUTHORIZED", "No token").status,
+        fail(401, "UNAUTHORIZED", "No token").body,
+      );
     send(200, ok({ id: USER.id, email: USER.email, role: USER.role }));
     return;
   }
@@ -132,29 +144,12 @@ const server = http.createServer(async (req, res) => {
   }
   if (path === "/auth/profile") {
     if (req.method === "GET") {
-      send(
-        200,
-        ok({
-          name: "Ravi Kumar",
-          phone: "+91 90000 00001",
-          region: "Bengaluru",
-          hospital: AMBULANCE.hospital.name,
-          control_center: "Bengaluru Traffic Control",
-        }),
-      );
+      send(200, ok({ ...PROFILE }));
       return;
     }
     if (req.method === "PATCH") {
-      send(
-        200,
-        ok({
-          name: body.name ?? "",
-          phone: body.phone ?? "",
-          region: body.region ?? "",
-          hospital: body.hospital ?? "",
-          control_center: body.control_center ?? "",
-        }),
-      );
+      Object.assign(PROFILE, body);
+      send(200, ok({ ...PROFILE }));
       return;
     }
   }
@@ -196,7 +191,14 @@ const server = http.createServer(async (req, res) => {
   }
   if (seg[0] === "emergencies" && seg[2] === "gps" && req.method === "POST") {
     const s = sessions.get(seg[1]);
-    if (!s) return send(404, JSON.stringify({ success: false, error: { code: "NOT_FOUND", message: "Session not found" } }));
+    if (!s)
+      return send(
+        404,
+        JSON.stringify({
+          success: false,
+          error: { code: "NOT_FOUND", message: "Session not found" },
+        }),
+      );
     send(
       200,
       ok({
@@ -215,31 +217,55 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (path === "/emergencies/current" && req.method === "GET") {
-    const live = [...sessions.entries()].find(
-      ([, s]) => s.status === "ACTIVE",
-    );
+    const live = [...sessions.entries()].find(([, s]) => s.status === "ACTIVE");
+    const latest = [...sessions.entries()].sort(
+      ([, a], [, b]) =>
+        new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
+    )[0];
     send(
       200,
       ok(
         live
           ? { active: true, session_id: live[0], status: live[1].status }
-          : { active: false },
+          : latest
+            ? { active: false, session_id: latest[0], status: latest[1].status }
+            : { active: false },
       ),
     );
     return;
   }
-  if (seg[0] === "emergencies" && seg[1] && ["stop", "cancel"].includes(seg[2] ?? "") && req.method === "POST") {
+  if (
+    seg[0] === "emergencies" &&
+    seg[1] &&
+    ["stop", "cancel"].includes(seg[2] ?? "") &&
+    req.method === "POST"
+  ) {
     const s = sessions.get(seg[1]);
     if (s) s.status = seg[2] === "cancel" ? "CANCELLED" : "COMPLETED";
-    send(200, ok({ status: s ? s.status : "COMPLETED" }));
+    send(
+      200,
+      ok({
+        status: s ? s.status : "COMPLETED",
+        release_sent: true,
+        release_pending: false,
+      }),
+    );
     return;
   }
-  if (seg[0] === "emergencies" && seg[2] === "heartbeat" && req.method === "POST") {
+  if (
+    seg[0] === "emergencies" &&
+    seg[2] === "heartbeat" &&
+    req.method === "POST"
+  ) {
     const s = sessions.get(seg[1]);
     send(200, ok({ status: s ? s.status : "ACTIVE" }));
     return;
   }
-  if (seg[0] === "emergencies" && seg[2] === "patient" && req.method === "POST") {
+  if (
+    seg[0] === "emergencies" &&
+    seg[2] === "patient" &&
+    req.method === "POST"
+  ) {
     send(200, ok({ status: sessions.get(seg[1])?.status ?? "ACTIVE" }));
     return;
   }
@@ -248,7 +274,9 @@ const server = http.createServer(async (req, res) => {
       200,
       ok(
         [...sessions.entries()]
-          .filter(([, s]) => ["COMPLETED", "CANCELLED", "TIMED_OUT"].includes(s.status))
+          .filter(([, s]) =>
+            ["COMPLETED", "CANCELLED", "TIMED_OUT"].includes(s.status),
+          )
           .map(([sid, s]) => ({
             id: sid,
             status: s.status,
@@ -259,8 +287,18 @@ const server = http.createServer(async (req, res) => {
             distance_m: 1200,
             junctions_crossed: 0,
             events: [
-              { id: `${sid}-start`, kind: "session", type: "started", at: s.started_at },
-              { id: `${sid}-end`, kind: "session", type: s.status, at: new Date().toISOString() },
+              {
+                id: `${sid}-start`,
+                kind: "session",
+                type: "started",
+                at: s.started_at,
+              },
+              {
+                id: `${sid}-end`,
+                kind: "session",
+                type: s.status,
+                at: new Date().toISOString(),
+              },
             ],
             last_latitude: 12.9716,
             last_longitude: 77.5946,

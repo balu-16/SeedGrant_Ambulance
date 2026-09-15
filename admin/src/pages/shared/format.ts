@@ -11,6 +11,14 @@ const DASH = "—";
 /** Bengaluru center — fallback when a junction has no coordinates. */
 export const DEFAULT_CENTER: [number, number] = [12.9716, 77.5946];
 
+/** Centralized tile URL (single source — VITE_TILES_URL or OSM default). */
+export function tileUrl(): string {
+  return (
+    (import.meta as unknown as { env?: Record<string, string> }).env
+      ?.VITE_TILES_URL ?? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+  );
+}
+
 export function fmtDateTime(iso: string | null | undefined): string {
   if (!iso) return DASH;
   const date = new Date(iso);

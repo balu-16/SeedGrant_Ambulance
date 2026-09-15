@@ -20,10 +20,22 @@ from app.api.v1 import (
     vision,
 )
 from app.core.config import get_settings, validate_startup_config
-from app.core.exceptions import AppError, app_error_handler, unhandled_handler
+from app.core.exceptions import (
+    AppError,
+    app_error_handler,
+    unhandled_handler,
+    validation_error_handler,
+)
 from app.core.logging import get_logger, setup_logging
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIdMiddleware
+
+# Ensure structured logging is configured at import time too (lifespan-only
+# setup left test clients and import-time errors on unstructured stdlib logs).
+try:
+    setup_logging()
+except Exception:
+    pass
 
 log = get_logger("lifespan")
 
@@ -57,6 +69,18 @@ async def _ingest_mqtt_message(topic: str, payload: dict) -> None:
     kind = parts[2]
     if kind not in ("telemetry", "heartbeat", "emergency") or not isinstance(payload, dict):
         return  # command topic stays log-only: Pi acks go through the HTTP API
+    # Bound MQTT payload size (HTTP path caps at 8KB via schemas). Drop
+    # oversized/spoofed payloads before they reach the DB.
+    import json as _json
+
+    from app.schemas.common import MAX_PAYLOAD_JSON_BYTES as _MAX_BYTES
+
+    try:
+        if len(_json.dumps(payload, default=str).encode()) > _MAX_BYTES:
+            log.warning("mqtt_payload_too_large", topic=topic)
+            return
+    except Exception:
+        return
     factory = get_session_factory()
     async with factory() as db:
         try:
@@ -156,19 +180,41 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     s = get_settings()
+    try:
+        setup_logging()
+    except Exception:
+        pass
     app = FastAPI(title="Edge-AI Traffic Management", version="1.0.0", lifespan=lifespan)
     # Starlette: last-added middleware is OUTERMOST. RateLimit must be inner to
     # RequestId so its 429 short-circuit can read request.state.request_id.
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(RequestIdMiddleware)
+    # allow_credentials=True must never pair with a wildcard origin.
+    _origins = s.cors_origins_list
+    if "*" in _origins:
+        _origins = [o for o in _origins if o != "*"]
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=s.cors_origins_list,
+        allow_origins=_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Device-Api-Key", "X-Request-Id"],
     )
+    # Reject Host-header attacks; allow localhost + Render/vercel frontends.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+
+    @app.middleware("http")
+    async def _security_headers(request, call_next):
+        resp = await call_next(request)
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        return resp
     app.add_exception_handler(AppError, app_error_handler)  # type: ignore
+    app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore
     app.add_exception_handler(Exception, unhandled_handler)
 
     @app.get("/health")
@@ -182,7 +228,18 @@ def create_app() -> FastAPI:
 
             async with get_engine().connect() as c:
                 await c.execute(text("SELECT 1"))
-            return {"success": True, "data": {"ready": True}}
+            mqtt_status: dict = {"configured": True}
+            try:
+                from app.integrations.mqtt import get_mqtt
+
+                _m = get_mqtt()
+                mqtt_status = {
+                    "connected": bool(getattr(_m, "connected", False)),
+                    "outbox": len(getattr(_m, "_outbox", []) or []),
+                }
+            except Exception:
+                pass
+            return {"success": True, "data": {"ready": True, "mqtt": mqtt_status}}
         except Exception as e:
             log.error("ready_check_failed", error=str(e))
             return JSONResponse(
@@ -207,34 +264,6 @@ def create_app() -> FastAPI:
         contacts.router,
     ):
         app.include_router(r, prefix="/api/v1")
-
-    # Built admin portal (admin/dist, vite base=/admin/) — guarded so dev
-    # servers without a portal build keep working unchanged.
-    from pathlib import Path
-
-    admin_dist = Path(__file__).resolve().parents[2] / "admin" / "dist"
-    if (admin_dist / "index.html").is_file():
-        from fastapi.responses import FileResponse
-        from fastapi.staticfiles import StaticFiles
-
-        assets = admin_dist / "assets"
-        if assets.is_dir():
-            app.mount(
-                "/admin/assets", StaticFiles(directory=assets), name="admin-assets"
-            )
-
-        @app.get("/admin", include_in_schema=False)
-        @app.get("/admin/{rest:path}", include_in_schema=False)
-        async def admin_spa(rest: str = ""):
-            candidate = (admin_dist / rest).resolve()
-            # serve real files (favicon.svg, …); SPA-fallback everything else
-            if (
-                rest
-                and candidate.is_file()
-                and admin_dist.resolve() in candidate.parents
-            ):
-                return FileResponse(candidate)
-            return FileResponse(admin_dist / "index.html")
 
     return app
 

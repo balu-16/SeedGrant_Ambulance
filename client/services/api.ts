@@ -77,7 +77,14 @@ export interface ApiDeps {
 }
 
 function defaultDeps(): ApiDeps {
-  return { getTokens, saveTokens, clearTokens, fetchImpl: fetch };
+  // Bind the browser global. Some web runtimes throw "Illegal invocation"
+  // when an unbound `window.fetch` is passed around as a function.
+  return {
+    getTokens,
+    saveTokens,
+    clearTokens,
+    fetchImpl: (...args) => fetch(...args),
+  };
 }
 
 /** Core request client — exported for sibling services (see emergency.ts). */
@@ -100,19 +107,39 @@ export async function requestCore<T>(
   }
   const { method = "GET", body, auth = true, retry = true } = opts;
   const tokens = auth ? await deps.getTokens() : null;
+  const TIMEOUT_MS = 15000;
+  const doFetch = async (): Promise<Response> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    try {
+      return await deps.fetchImpl(`${base}/api/v1${path}`, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          ...(tokens ? { Authorization: `Bearer ${tokens.access_token}` } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        signal: ctrl.signal as never,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   let res: Response;
   try {
-    res = await deps.fetchImpl(`${base}/api/v1${path}`, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        ...(tokens ? { Authorization: `Bearer ${tokens.access_token}` } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    });
+    res = await doFetch();
+    // One idempotent retry for transient 5xx on GET (e.g. Render cold start).
+    if (res.status >= 500 && method === "GET" && retry) {
+      await new Promise((r) => setTimeout(r, 800));
+      res = await doFetch();
+    }
   } catch (e) {
     throw new ApiError(
-      e instanceof Error ? `Network error: ${e.message}` : "Network error",
+      e instanceof Error
+        ? e.name === "AbortError"
+          ? "Request timed out — please retry"
+          : `Network error: ${e.message}`
+        : "Network error",
       0,
       "NETWORK_ERROR",
     );
@@ -274,15 +301,21 @@ export async function apiGetProfile(): Promise<BackendProfile> {
 export async function apiUpdateProfile(
   patch: Partial<BackendProfile>,
 ): Promise<BackendProfile> {
+  // Send only dirty fields — the server replaces the row, so sending "" for
+  // untouched fields would wipe them when the local copy is stale.
+  const body: Partial<BackendProfile> = {};
+  for (const k of [
+    "name",
+    "phone",
+    "region",
+    "hospital",
+    "control_center",
+  ] as const) {
+    if (patch[k] !== undefined) body[k] = patch[k];
+  }
   return request<BackendProfile>("/auth/profile", {
     method: "PATCH",
-    body: {
-      name: patch.name ?? "",
-      phone: patch.phone ?? "",
-      region: patch.region ?? "",
-      hospital: patch.hospital ?? "",
-      control_center: patch.control_center ?? "",
-    },
+    body,
   });
 }
 

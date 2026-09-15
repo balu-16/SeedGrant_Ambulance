@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,6 +33,11 @@ class Detection(Base):
     """Queryable vehicle-detection record (Pi background counts + /vision/detect)."""
 
     __tablename__ = "detections"
+    __table_args__ = (
+        # junction timeline lookup — mirrors alembic 0003
+        # ix_detections_junction_detected so create_all == live
+        Index("ix_detections_junction_detected", "junction_id", "detected_at"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

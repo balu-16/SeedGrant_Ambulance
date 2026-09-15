@@ -72,7 +72,12 @@ test("session events come from the backend command stream, not a simulator", () 
   let state = reducer(loggedIn(), { type: "start", now });
   state = reducer(state, {
     type: "sessionEvent",
-    event: { id: "c1", kind: "requested", timestamp: now + 3000, approach: "NORTH" },
+    event: {
+      id: "c1",
+      kind: "requested",
+      timestamp: now + 3000,
+      approach: "NORTH",
+    },
   });
   state = reducer(state, {
     type: "sessionEvent",
@@ -157,7 +162,10 @@ test("local edits patch mutable fields but never fabricate ids", () => {
 });
 test("history filters by calendar periods and case-insensitive hospital search", () => {
   const history = [
-    session({ hospital: "Alpha Hospital", startedAt: now - 3_600_000, endedAt: now }, 0),
+    session(
+      { hospital: "Alpha Hospital", startedAt: now - 3_600_000, endedAt: now },
+      0,
+    ),
     session({ hospital: "Beta Clinic" }, 1),
     session({ hospital: "Gamma Hospital" }, 2),
     session({ hospital: "Delta Clinic" }, 3),
@@ -185,7 +193,12 @@ test("backend history rows map to real sessions with events and distance", () =>
     distance_m: 2840.5,
     junctions_crossed: 3,
     events: [
-      { id: "e1", kind: "session", type: "started", at: new Date(now - 900_000).toISOString() },
+      {
+        id: "e1",
+        kind: "session",
+        type: "started",
+        at: new Date(now - 900_000).toISOString(),
+      },
       {
         id: "e2",
         kind: "command",
@@ -200,7 +213,12 @@ test("backend history rows map to real sessions with events and distance", () =>
         type: "RELEASE_PRIORITY",
         at: new Date(now - 100_000).toISOString(),
       },
-      { id: "e4", kind: "session", type: "COMPLETED", at: new Date(now).toISOString() },
+      {
+        id: "e4",
+        kind: "session",
+        type: "COMPLETED",
+        at: new Date(now).toISOString(),
+      },
     ],
     last_latitude: 12.97,
     last_longitude: 77.59,

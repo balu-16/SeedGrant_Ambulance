@@ -65,3 +65,20 @@ async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
             "request_id": rid,
         },
     )
+
+
+async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return Pydantic/FastAPI validation errors in the standard envelope."""
+    from fastapi.exceptions import RequestValidationError
+
+    rid = getattr(request.state, "request_id", "-")
+    details = exc.errors() if isinstance(exc, RequestValidationError) else []
+    log.warning("validation_error", request_id=rid, path=request.url.path, errors=str(details))
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "error": {"code": "VALIDATION_ERROR", "message": "Request validation failed"},
+            "request_id": rid,
+        },
+    )

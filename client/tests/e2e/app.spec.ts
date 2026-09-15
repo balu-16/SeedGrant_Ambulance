@@ -10,7 +10,7 @@ async function openLogin(page: Page) {
 }
 async function signIn(page: Page) {
   await page
-    .getByRole("textbox", { name: "Driver ID / Email" })
+    .getByRole("textbox", { name: "Email" })
     .fill("driver001@example.com");
   await page.getByLabel("Password", { exact: true }).fill("123456");
   await page.getByRole("button", { name: "Login", exact: true }).click();
@@ -20,8 +20,9 @@ async function stored(page: Page) {
   return page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? "{}"), key);
 }
 async function screenshot(page: Page, name: string) {
-  await mkdir("docs/screenshots", { recursive: true });
-  await page.screenshot({ path: `docs/screenshots/${name}.png` });
+  const directory = process.env.SCREENSHOT_DIR ?? "docs/screenshots";
+  await mkdir(directory, { recursive: true });
+  await page.screenshot({ path: `${directory}/${name}.png` });
 }
 test("onboarding, login validation, restore, and protected navigation", async ({
   page,
@@ -59,10 +60,10 @@ test("onboarding, login validation, restore, and protected navigation", async ({
   await expect(page.getByText("Driver Login", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Login", exact: true }).click();
   await expect(
-    page.getByText("Enter your driver ID or email.", { exact: true }),
+    page.getByText("Enter your email.", { exact: true }),
   ).toBeVisible();
   await page
-    .getByRole("textbox", { name: "Driver ID / Email" })
+    .getByRole("textbox", { name: "Email" })
     .fill("driver001@example.com");
   await page.getByLabel("Password", { exact: true }).fill("wrong");
   await page.getByRole("button", { name: "Show password" }).click();
@@ -72,7 +73,7 @@ test("onboarding, login validation, restore, and protected navigation", async ({
   );
   await page.getByRole("button", { name: "Hide password" }).click();
   await page.getByRole("button", { name: "Login", exact: true }).click();
-  await expect(page.getByText(/Incorrect driver ID/)).toBeVisible();
+  await expect(page.getByText(/Incorrect driver email/)).toBeVisible();
   await signIn(page);
   // The signed-in identity is the backend user id — no mock driver id exists.
   await expect
@@ -119,9 +120,7 @@ test("emergency survives reload and completes into History", async ({
   await expect(
     page.getByText("Tracking Standby", { exact: true }),
   ).toBeVisible();
-  await expect
-    .poll(async () => (await stored(page)).history.length)
-    .toBe(1);
+  await expect.poll(async () => (await stored(page)).history.length).toBe(1);
   const saved = (await stored(page)).history[0];
   expect(saved.id).toBe(original);
   expect(saved.status).toBe("completed");

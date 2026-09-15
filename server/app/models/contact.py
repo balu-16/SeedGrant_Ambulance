@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +11,11 @@ class DriverContact(Base):
     """Emergency contact (SOS recipient) — user-scoped, capped at 5 in the API."""
 
     __tablename__ = "emergency_contacts"
+    __table_args__ = (
+        # per-user ordering — mirrors alembic 0007 ix_contacts_user_position
+        # so create_all == live
+        Index("ix_contacts_user_position", "user_id", "position"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True

@@ -26,11 +26,20 @@ test("active backend rows stay active with no fake end time", () => {
   assert.equal(s.endedAt, undefined);
 });
 
-test("cancelled and timed-out rows map to cancelled", () => {
-  assert.equal(mapHistoryItem({ ...base, status: "CANCELLED" }).status, "cancelled");
-  assert.equal(mapHistoryItem({ ...base, status: "TIMED_OUT" }).status, "cancelled");
+test("cancelled and timed-out rows keep distinct terminal statuses", () => {
+  assert.equal(
+    mapHistoryItem({ ...base, status: "CANCELLED" }).status,
+    "cancelled",
+  );
+  assert.equal(
+    mapHistoryItem({ ...base, status: "TIMED_OUT" }).status,
+    "timed_out",
+  );
 });
 
 test("a missing hospital falls back to the display default", () => {
-  assert.equal(mapHistoryItem({ ...base, hospital: null }).hospital, "Unnamed hospital");
+  assert.equal(
+    mapHistoryItem({ ...base, hospital: null }).hospital,
+    "Unnamed hospital",
+  );
 });

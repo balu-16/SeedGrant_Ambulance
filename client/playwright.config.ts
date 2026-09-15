@@ -7,7 +7,6 @@ export default defineConfig({
   use: {
     baseURL: "http://localhost:8081",
     viewport: { width: 393, height: 852 },
-    channel: "chrome",
     launchOptions: { args: ["--no-sandbox"] },
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
@@ -27,6 +26,9 @@ export default defineConfig({
       reuseExistingServer: true,
       timeout: 120000,
       env: {
+        // Do not let a developer's local .env (or a deployed Render URL)
+        // override the hermetic mock used by these tests.
+        EXPO_NO_DOTENV: "1",
         EXPO_PUBLIC_API_URL: "http://127.0.0.1:8787",
       },
     },

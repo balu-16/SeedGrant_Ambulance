@@ -45,6 +45,7 @@ async def sweep_timeouts(db, force: bool = False) -> dict:
     # Drivers whose sessions flip to TIMED_OUT in this sweep — notified below
     # (fire-and-forget) so the driver learns the session died silently.
     timed_out_drivers: list = []
+    release_commands = []
     for sess in sessions:
         last = sess.last_gps_at or sess.started_at
         stale_gps = last and (now - last) > timedelta(minutes=s.INACTIVITY_TIMEOUT_MINUTES)
@@ -57,20 +58,9 @@ async def sweep_timeouts(db, force: bool = False) -> dict:
             sess.ended_at = now
             counts["sessions_timed_out"] += 1
             timed_out_drivers.append(sess.driver_id)
-            cmds = (
-                (
-                    await db.execute(
-                        select(EmergencyCommand).where(
-                            EmergencyCommand.session_id == sess.id,
-                            EmergencyCommand.status.in_(("PENDING", "SENT", "ACKNOWLEDGED")),
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            for c in cmds:
-                c.status = "RELEASED"
+            from app.services.emergency_service import release_session_commands
+
+            release_commands.extend(await release_session_commands(db, sess.id))
 
     cmds = (
         (
@@ -99,6 +89,12 @@ async def sweep_timeouts(db, force: bool = False) -> dict:
 
     if any(counts.values()):
         await db.flush()
+
+    if release_commands:
+        from app.services.emergency_service import publish_release_commands
+
+        if not await publish_release_commands(release_commands):
+            counts["release_commands_pending"] = len(release_commands)
 
     # Fire-and-forget timeout pushes (background task, never raises) — only
     # for sessions this sweep actually flipped, so no duplicate notifies.

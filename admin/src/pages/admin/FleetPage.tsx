@@ -256,9 +256,9 @@ function FleetForm({
         ))}
       </SelectField>
       <Txt muted>
-        Drivers listed here are portal accounts already linked to the fleet;
-        picking one reassigns this ambulance to that driver, "detach" clears
-        the assignment.
+        Active driver accounts are listed here, including unassigned drivers.
+        Picking one assigns this ambulance to that driver; "detach" clears the
+        assignment.
       </Txt>
 
       {initial && (

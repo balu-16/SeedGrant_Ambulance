@@ -86,7 +86,16 @@ export default function HistoryScreen() {
     setRefreshing(true);
     void loadBackend(0, false).finally(() => setRefreshing(false));
   }, [loadBackend]);
-  const all = [...remote, ...state.history];
+  const remoteIds = new Set(
+    remote.map((session) => session.backendSessionId).filter(Boolean),
+  );
+  const all = [
+    ...remote,
+    ...state.history.filter(
+      (session) =>
+        !session.backendSessionId || !remoteIds.has(session.backendSessionId),
+    ),
+  ];
   const sessions = filterHistory(all, period, query, status);
   const month = filterHistory(all, "This Month", "", "all");
   const completed = month.filter((s) => s.status === "completed");
@@ -255,12 +264,15 @@ export default function HistoryScreen() {
                       ? "Completed"
                       : session.status === "cancelled"
                         ? "Cancelled"
-                        : "Active"
+                        : session.status === "timed_out"
+                          ? "Timed out"
+                          : "Active"
                   }
                   tone={
                     session.status === "completed"
                       ? "green"
-                      : session.status === "cancelled"
+                      : session.status === "cancelled" ||
+                          session.status === "timed_out"
                         ? "muted"
                         : "red"
                   }

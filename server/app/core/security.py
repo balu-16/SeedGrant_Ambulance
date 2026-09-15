@@ -33,7 +33,9 @@ def _encode(payload: dict, expires: timedelta) -> str:
         "iss": s.JWT_ISSUER,
         "aud": s.JWT_AUDIENCE,
     }
-    return jwt.encode(payload, s.JWT_SECRET, algorithm=s.JWT_ALGORITHM)
+    # Algorithm is hardcoded: allowing JWT_ALGORITHM=none via env would risk
+    # accepting unsigned tokens depending on PyJWT version.
+    return jwt.encode(payload, s.JWT_SECRET, algorithm="HS256")
 
 
 def create_access_token(sub: str) -> str:
@@ -64,7 +66,7 @@ def decode_token(token: str) -> dict:
         return jwt.decode(
             token,
             s.JWT_SECRET,
-            algorithms=[s.JWT_ALGORITHM],
+            algorithms=["HS256"],
             issuer=s.JWT_ISSUER,
             audience=s.JWT_AUDIENCE,
         )

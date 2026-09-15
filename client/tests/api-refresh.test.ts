@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import { requestCore, ApiError, type ApiDeps } from "../services/api";
 import {
+  backendGps,
   backendStop,
   retrackBackendSession,
   stopActiveBackendSession,
@@ -159,7 +160,10 @@ test("network failure during refresh keeps tokens and raises NETWORK_ERROR", asy
 
 // ---- backend session-id lifecycle -------------------------------------------
 
-function withFetch(impl: typeof fetch, run: () => Promise<void>): Promise<void> {
+function withFetch(
+  impl: typeof fetch,
+  run: () => Promise<void>,
+): Promise<void> {
   const real = globalThis.fetch;
   globalThis.fetch = impl;
   return run().finally(() => {
@@ -202,5 +206,30 @@ test("failed stop keeps the session id tracked so cleanup can retry", async () =
       await stopActiveBackendSession(); // must resolve despite the failure
       assert.equal(__getActiveBackendSessionId(), "S-2");
     },
+  );
+});
+
+test("backend GPS sends the device capture timestamp", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  await withFetch(
+    (async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return jsonResponse({
+        success: true,
+        data: { nearby: [], command: null, status: "ACTIVE" },
+      });
+    }) as typeof fetch,
+    async () => {
+      const capturedAt = 1_700_000_000_000;
+      await backendGps("S-3", {
+        latitude: 12.9,
+        longitude: 77.5,
+        timestamp: capturedAt,
+      });
+    },
+  );
+  assert.equal(
+    requestBody?.timestamp,
+    new Date(1_700_000_000_000).toISOString(),
   );
 });

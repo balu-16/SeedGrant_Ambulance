@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from app.core.config import get_settings
 from app.models.emergency import EmergencyCommand
 from app.models.junction import Approach, Junction
 from app.services import command_service as cmds
@@ -62,10 +63,11 @@ async def process_gps(
     )
     cands = nearby_junctions(lat, lon, junctions)
     if not cands:
-        return {"nearby": [], "command": None}
+        return {"nearby": [], "command": None, "should_publish": False}
 
     mov_bearing = movement_bearing(prev_lat, prev_lon, lat, lon) if prev_lat is not None else None
     result_cmd = None
+    should_publish = False
     nearby_out = []
 
     for j, dist in cands:
@@ -74,7 +76,15 @@ async def process_gps(
         )
         approach_dir = detect_approach(heading, mov_bearing, approaches)
         prev_d = prev_dist_map.get(str(j.id))
-        approaching = True
+        # A first fix is accepted as an approach only when it carries a
+        # matching heading and a moving speed.  Without both, being inside a
+        # geofence is not enough evidence to request priority.
+        approaching = bool(
+            prev_d is None
+            and approach_dir
+            and speed is not None
+            and speed >= get_settings().MIN_MOVING_SPEED_MS
+        )
         if prev_d is not None:
             approaching = is_approaching(prev_d, dist, speed)
 
@@ -113,25 +123,29 @@ async def process_gps(
             session.status = "CROSSING"
             from app.integrations.notify import notify_user
 
-            await publish_command(result_cmd, jid, last_cmd.approach)
+            if await emg.publish_release_commands([result_cmd]):
+                should_publish = True
             await notify_user(
                 db, session.driver_id, "Junction crossed", f"Priority released at {j.name}."
             )
             continue
 
         if approach_dir and approaching:
-            cmd, should_publish = await cmds.get_or_create_priority(
+            cmd, new_command = await cmds.get_or_create_priority(
                 db, session.id, j.id, approach_dir
             )
+            if cmd is None:
+                continue  # junction deactivated — skip priority silently
             # Only claim PRIORITY_REQUESTED when the command is actually live
             # (new or re-armed) — a stale/HELD/RELEASED command found by
             # correlation_id must not flip the session status back.
-            if should_publish:
+            if new_command:
                 if session.status in ("ACTIVE", "APPROACHING_JUNCTION", "CROSSING"):
                     session.status = "PRIORITY_REQUESTED"
                 from app.integrations.notify import resolve_player_ids, schedule_push
 
-                await publish_command(cmd, jid, approach_dir)
+                if await publish_command(cmd, jid, approach_dir):
+                    should_publish = True
                 # resolve subscriptions in-request, then send in the background:
                 # a slow Expo endpoint must never add latency to the 1 Hz GPS fix
                 player_ids = await resolve_player_ids(db, session.driver_id)
@@ -145,4 +159,8 @@ async def process_gps(
 
     # timeout guard
     emg.apply_timeouts(session)
-    return {"nearby": nearby_out, "command": result_cmd}
+    return {
+        "nearby": nearby_out,
+        "command": result_cmd,
+        "should_publish": should_publish,
+    }

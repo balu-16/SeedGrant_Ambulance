@@ -17,7 +17,7 @@ from app.core.dependencies import (
     require_any,
     require_role,
 )
-from app.core.exceptions import AppError, Conflict, NotFound
+from app.core.exceptions import AppError, Conflict, Forbidden, NotFound
 from app.core.security import hash_password
 from app.models.device import AuditLog, Device, Telemetry, UserNotificationPref
 from app.models.emergency import EmergencyCommand, EmergencySession, GpsPoint
@@ -257,31 +257,28 @@ async def all_emergencies(
 
 @router.get("/fleet/drivers")
 async def fleet_drivers(db=Depends(get_db), user=Depends(require_any("ADMIN", "HOSPITAL"))):
-    """Drivers directory derived from the visible fleet (ambulance assignments)."""
-    q = select(Ambulance).where(Ambulance.driver_id.isnot(None))
+    """Active driver directory, including drivers not yet assigned to a vehicle."""
+    q = (
+        select(User, Ambulance)
+        .outerjoin(Ambulance, Ambulance.driver_id == User.id)
+        .where(func.lower(User.role) == "driver", User.is_active.is_(True))
+    )
     if str(user.role).lower() == "hospital":
         scope = hospital_scope(user)
         if scope is None:  # unassigned HOSPITAL user: see nothing
             return {"success": True, "data": []}
-        q = q.where(Ambulance.hospital_id == scope)
-    rows = (await db.execute(q)).scalars().all()
-    driver_ids = {a.driver_id for a in rows}
-    users = {
-        u.id: u.email
-        for u in (
-            await db.execute(select(User).where(User.id.in_(driver_ids)))
-        ).scalars().all()
-    } if driver_ids else {}
+        q = q.where(or_(User.hospital_id == scope, Ambulance.hospital_id == scope))
+    rows = (await db.execute(q)).all()
     return {
         "success": True,
         "data": [
             {
-                "driver_id": str(a.driver_id),
-                "email": users.get(a.driver_id),
-                "ambulance_id": str(a.id),
-                "vehicle_no": a.vehicle_no,
+                "driver_id": str(driver.id),
+                "email": driver.email,
+                "ambulance_id": str(ambulance.id) if ambulance else None,
+                "vehicle_no": ambulance.vehicle_no if ambulance else None,
             }
-            for a in rows
+            for driver, ambulance in rows
         ],
     }
 
@@ -297,11 +294,16 @@ async def list_users(
     db=Depends(get_db),
     _=Depends(require_role("ADMIN")),
 ):
+    from sqlalchemy import func as _func
+
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
+    count_q = select(_func.count()).select_from(User)
     q = select(User).order_by(desc(User.created_at)).limit(limit).offset(offset)
     if role:
         q = q.where(func.lower(User.role) == role.lower())
+        count_q = count_q.where(func.lower(User.role) == role.lower())
+    total = (await db.execute(count_q)).scalar_one()
     rows = (await db.execute(q)).scalars().all()
     assigns = await _assignments_by_user(
         db, [u.id for u in rows if str(u.role).lower() == "police"]
@@ -312,6 +314,7 @@ async def list_users(
             "items": [_user_out(u, assigns.get(u.id)) for u in rows],
             "limit": limit,
             "offset": offset,
+            "total": total,
         },
     }
 
@@ -390,6 +393,39 @@ async def update_user(
     u = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
     if not u:
         raise NotFound("User not found")
+    current_role = str(u.role).lower()
+    requested_role = str(body.role).lower() if body.role is not None else current_role
+    if u.id == admin.id and (body.is_active is False or requested_role != "admin"):
+        raise Forbidden("You cannot disable or demote your own admin account")
+    if current_role == "admin" and u.is_active and (
+        body.is_active is False or requested_role != "admin"
+    ):
+        active_admins = (
+            await db.execute(
+                select(func.count()).select_from(User).where(
+                    func.lower(User.role) == "admin", User.is_active.is_(True)
+                )
+            )
+        ).scalar_one()
+        if active_admins <= 1:
+            raise Conflict("At least one active admin account is required")
+    final_active = body.is_active if body.is_active is not None else u.is_active
+    final_hospital_id = (
+        body.hospital_id if "hospital_id" in body.model_fields_set else u.hospital_id
+    )
+    assigned_ambulances = (
+        await db.execute(select(Ambulance).where(Ambulance.driver_id == u.id))
+    ).scalars().all()
+    if assigned_ambulances:
+        if requested_role != "driver" or not final_active:
+            raise Conflict("Unassign this driver before changing its role or deactivating it")
+        if any(
+            a.hospital_id is not None
+            and final_hospital_id is not None
+            and a.hospital_id != final_hospital_id
+            for a in assigned_ambulances
+        ):
+            raise Conflict("Driver hospital must match the assigned ambulance")
     changes: dict = {}
     if body.is_active is not None:
         u.is_active = body.is_active
@@ -409,7 +445,9 @@ async def update_user(
             "junction_ids only apply to police users", code="VALIDATION_ERROR", status_code=422
         )
     # (re)build assignments when requested, or drop them on a role change away from police
-    if body.junction_ids is not None or (body.role is not None and str(body.role).lower() != "police"):
+    if body.junction_ids is not None or (
+        body.role is not None and str(body.role).lower() != "police"
+    ):
         if body.junction_ids:
             found = set(
                 (
@@ -490,7 +528,15 @@ async def reset_user_password(
         {"user_id": str(u.id), "email": u.email},
     )
     await db.commit()
-    return {"success": True, "data": {"user_id": str(u.id), "password": pw}}
+    return {
+        "success": True,
+        "data": {
+            "user_id": str(u.id),
+            "password": pw,
+            "one_time_only": True,
+            "message": "Display once and share securely — it is not stored or logged.",
+        },
+    }
 
 
 # ---- hospitals --------------------------------------------------------------
@@ -673,6 +719,10 @@ async def live(db=Depends(get_db), user=Depends(require_any("ADMIN", "HOSPITAL",
                 ],
             }
         )
+    if str(user.role).lower() == "hospital":
+        # Junction devices are not hospital-owned resources. Do not expose
+        # their telemetry or health state through the hospital live view.
+        return {"success": True, "data": {"items": items, "junction_states": {}}}
     # Per-junction live state for map-marker coloring: device health plus the
     # latest telemetry payload (single windowed query, no N+1).
     jq = select(Junction.id, Junction.name)

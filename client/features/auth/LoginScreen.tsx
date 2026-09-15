@@ -95,9 +95,9 @@ export default function LoginScreen() {
           </View>
           <View style={s.panel}>
             <Field
-              label="Driver ID / Email"
+              label="Email"
               icon="email-outline"
-              placeholder="Enter your driver ID or email"
+              placeholder="Enter your email"
               value={identifier}
               onChangeText={setIdentifier}
               autoCapitalize="none"
@@ -106,7 +106,7 @@ export default function LoginScreen() {
               onSubmitEditing={() => passwordRef.current?.focus()}
               error={
                 submitted && !identifier.trim()
-                  ? "Enter your driver ID or email."
+                  ? "Enter your email."
                   : undefined
               }
             />

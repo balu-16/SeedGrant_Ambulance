@@ -46,8 +46,12 @@ def is_approaching(prev_dist: float, curr_dist: float, speed: float | None) -> b
 
 def has_crossed(prev_dist: float, curr_dist: float, release_m: float | None = None) -> bool:
     r = release_m if release_m is not None else get_settings().CROSS_RELEASE_DISTANCE_M
-    # crossed if we were very close and now moving away
-    return prev_dist <= max(r * 2.5, 50.0) and curr_dist > prev_dist
+    # Require a meaningful outward movement.  A small GPS wobble while the
+    # ambulance is still approaching must not release the priority command.
+    return (
+        prev_dist <= max(r * 2.5, 50.0)
+        and curr_dist > prev_dist + max(10.0, r * 0.25)
+    )
 
 
 def movement_bearing(prev_lat, prev_lon, cur_lat, cur_lon) -> float | None:

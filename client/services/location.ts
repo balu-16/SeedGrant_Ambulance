@@ -16,6 +16,8 @@ export interface GpsFix {
   accuracy: number | null;
   speed: number | null;
   heading: number | null;
+  /** Device capture time from Expo, not the time the request was sent. */
+  timestamp: number;
 }
 
 export type GpsStatus = "live" | "unavailable";
@@ -66,6 +68,7 @@ export async function watchGps(
           accuracy: pos.coords.accuracy ?? null,
           speed: pos.coords.speed ?? null,
           heading: pos.coords.heading ?? null,
+          timestamp: pos.timestamp,
         };
         onFix(latest);
       },

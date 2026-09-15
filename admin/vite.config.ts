@@ -7,8 +7,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react()],
   // Standalone deployment (Vercel) serves from "/".
-  // Legacy note: the portal was once served by FastAPI under /admin
-  // (see server/app/main.py); `vite dev` serves at http://localhost:5173/.
+  // `vite dev` serves at http://localhost:5173/.
   base: "/",
   resolve: {
     alias: {

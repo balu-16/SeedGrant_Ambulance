@@ -69,11 +69,19 @@ function tryRefresh(refreshToken: string): Promise<boolean> {
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
       try {
-        const res = await fetch(`${API_BASE}/auth/refresh`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ refresh_token: refreshToken }),
-        });
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 15000);
+        let res: Response;
+        try {
+          res = await fetch(`${API_BASE}/auth/refresh`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh_token: refreshToken }),
+            signal: ctrl.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
         const payload = (await res.json()) as ApiEnvelope<Tokens>;
         if (res.ok && payload.success && payload.data?.access_token) {
           saveTokens(payload.data);
@@ -97,19 +105,31 @@ export async function request<T>(
 ): Promise<T> {
   const { method = "GET", body, auth = true, retry = true } = opts;
   const tokens = auth ? getTokens() : null;
+  const TIMEOUT_MS = 15000;
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        ...(tokens ? { Authorization: `Bearer ${tokens.access_token}` } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    try {
+      res = await fetch(`${API_BASE}${path}`, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          ...(tokens ? { Authorization: `Bearer ${tokens.access_token}` } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (e) {
     throw new ApiError(
-      e instanceof Error ? `Network error: ${e.message}` : "Network error",
+      e instanceof Error
+        ? e.name === "AbortError"
+          ? "Request timed out — please retry"
+          : `Network error: ${e.message}`
+        : "Network error",
       0,
       "NETWORK_ERROR",
     );

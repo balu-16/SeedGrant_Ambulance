@@ -110,10 +110,13 @@ export async function getExpoPushToken(): Promise<string | null> {
  */
 export async function sendTokenToBackend(
   token: string,
-  accessToken?: string,
+  _accessToken?: string,
 ): Promise<boolean> {
   try {
-    if (!isApiEnabled() || !accessToken) return false;
+    // NOTE: _accessToken is accepted for backwards-compat but intentionally
+    // ignored — request() re-reads the token store so there is no
+    // saveTokens-flush race (register-before-persist → 401).
+    if (!isApiEnabled()) return false;
     await request("/push/register", {
       method: "POST",
       body: {

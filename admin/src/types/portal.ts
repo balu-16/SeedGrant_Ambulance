@@ -12,6 +12,7 @@ export interface PortalUser {
   hospital_id: string | null;
   junction_ids: string[];
   created_at: string;
+  last_login: string | null;
 }
 
 export interface Hospital {
@@ -117,17 +118,23 @@ export interface JunctionSummary {
   name: string;
   latitude: number | null;
   longitude: number | null;
+  is_active?: boolean;
+  radius_m?: number | null;
 }
 
 export interface JunctionApproach {
   direction: string;
   heading_min: number | null;
   heading_max: number | null;
+  entry_lat?: number | null;
+  entry_lon?: number | null;
 }
 
 export interface JunctionDetail {
   id: string;
   name: string;
+  is_active?: boolean;
+  radius_m?: number | null;
   approaches: JunctionApproach[];
 }
 

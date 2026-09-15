@@ -22,10 +22,12 @@ function location(v: unknown): boolean {
     ["East", "North", "West", "South"].includes(String(v.junction.approach))
   );
 }
-function emergency(v: unknown, status: "active" | "completed"): boolean {
+type PersistedStatus = "active" | "completed" | "cancelled" | "timed_out";
+function emergency(v: unknown, status: PersistedStatus): boolean {
   if (!object(v) || !Array.isArray(v.events)) return false;
   return (
     text(v.id) &&
+    (v.backendSessionId === undefined || text(v.backendSessionId)) &&
     number(v.startedAt) &&
     anyText(v.hospital) &&
     number(v.distanceKm) &&
@@ -83,7 +85,13 @@ export function decodeState(raw: string): AppState {
     (v.auth === null ||
       (object(v.auth) && text(v.auth.driverId) && number(v.auth.signedInAt))) &&
     (v.active === null || (v.auth !== null && emergency(v.active, "active"))) &&
-    v.history.every((s) => emergency(s, "completed"));
+    v.history.every(
+      (s) =>
+        (s.status === "completed" ||
+          s.status === "cancelled" ||
+          s.status === "timed_out") &&
+        emergency(s, s.status),
+    );
   if (!valid) throw new Error("Invalid saved data");
   return v as unknown as AppState;
 }

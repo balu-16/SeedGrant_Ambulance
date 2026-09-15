@@ -7,6 +7,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { request } from "@/services/api";
+import { fetchMqttHealth } from "@/services/portal";
 import { Button, Card, PageHeader, SectionTitle, Txt } from "@/components/ui";
 import { fmtDateTime, fmtValue } from "@/pages/admin/shared";
 import { ErrorCard, KVList, LoadingBlock } from "@/pages/admin/widgets";
@@ -22,6 +23,11 @@ export function SystemPage() {
   const config = useQuery({
     queryKey: ["admin", "config-check"],
     queryFn: () => request<Record<string, unknown>>("/admin/config-check"),
+  });
+  const mqtt = useQuery({
+    queryKey: ["admin", "mqtt-health"],
+    queryFn: fetchMqttHealth,
+    refetchInterval: 10_000,
   });
 
   const [sweep, setSweep] = useState<SweepResult | null>(null);
@@ -67,6 +73,25 @@ export function SystemPage() {
           </Txt>
           <KVList
             entries={Object.entries(sweep.data).map(
+              ([k, v]) => [k, fmtValue(v)] as [string, string],
+            )}
+          />
+        </Card>
+      )}
+
+      <SectionTitle>MQTT health</SectionTitle>
+      {mqtt.isError ? (
+        <ErrorCard
+          title="Could not load MQTT health"
+          error={mqtt.error}
+          onRetry={() => void mqtt.refetch()}
+        />
+      ) : mqtt.isLoading ? (
+        <LoadingBlock label="Checking MQTT broker" />
+      ) : (
+        <Card>
+          <KVList
+            entries={Object.entries(mqtt.data ?? {}).map(
               ([k, v]) => [k, fmtValue(v)] as [string, string],
             )}
           />

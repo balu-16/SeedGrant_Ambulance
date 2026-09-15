@@ -261,11 +261,13 @@ export function Table<T>({
   rows,
   keyOf,
   emptyFallback,
+  onRowClick,
 }: {
   columns: TableColumn<T>[];
   rows: T[];
   keyOf: (row: T) => string;
   emptyFallback?: ReactNode;
+  onRowClick?: (row: T) => void;
 }) {
   if (rows.length === 0 && emptyFallback) {
     return <>{emptyFallback}</>;
@@ -284,7 +286,11 @@ export function Table<T>({
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={keyOf(row)}>
+            <tr
+              key={keyOf(row)}
+              onClick={onRowClick ? () => onRowClick(row) : undefined}
+              style={onRowClick ? { cursor: "pointer" } : undefined}
+            >
               {columns.map((c) => (
                 <td
                   key={c.key}

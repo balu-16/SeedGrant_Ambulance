@@ -38,7 +38,6 @@ import { listContacts } from "@/services/contacts";
 import {
   backendCurrent,
   backendGps,
-  backendHeartbeat,
   backendHospitals,
   backendJunctions,
   backendPatient,
@@ -164,8 +163,14 @@ export default function HomeScreen() {
   >(null);
   const [now, setNow] = useState(() => Date.now());
   const activeId = active?.id;
+  const persistedBackendSessionId = active?.backendSessionId;
+  const hasActiveSession = active !== null;
   // Backend-linked session (real API) — null when unlinked.
-  const [backendSessionId, setBackendSessionId] = useState<string | null>(null);
+  const [backendSessionId, setBackendSessionId] = useState<string | null>(
+    active?.backendSessionId ?? null,
+  );
+  const [backendError, setBackendError] = useState(false);
+  const [stopError, setStopError] = useState(false);
   const [linked, setLinked] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -183,7 +188,55 @@ export default function HomeScreen() {
       if (!(await isBackendLinked())) return;
       try {
         const cur = await backendCurrent();
-        if (!cancelled && cur.active) setBackendSessionId(cur.session_id);
+        if (cancelled) return;
+        if (cur.active) {
+          setBackendSessionId(cur.session_id);
+          if (!hasActiveSession) {
+            // The backend is authoritative after local storage loss or a
+            // fresh device login: recreate the local shell around the live
+            // server session instead of leaving the driver on an idle screen.
+            dispatch({
+              type: "start",
+              backendSessionId: cur.session_id,
+              now: Date.now(),
+            });
+          } else if (persistedBackendSessionId !== cur.session_id) {
+            dispatch({ type: "linkBackend", sessionId: cur.session_id });
+          }
+        } else if (cur.release_pending && cur.session_id) {
+          // A timeout/deactivation may have ended the database session while
+          // MQTT was unavailable. Keep a local emergency shell visible so the
+          // driver can retry the idempotent stop and never sees a false
+          // "back to normal" state.
+          retrackBackendSession(cur.session_id);
+          setBackendSessionId(cur.session_id);
+          setBackendError(true);
+          setStopError(true);
+          if (!hasActiveSession) {
+            dispatch({
+              type: "start",
+              backendSessionId: cur.session_id,
+              now: Date.now(),
+            });
+          } else if (persistedBackendSessionId !== cur.session_id) {
+            dispatch({ type: "linkBackend", sessionId: cur.session_id });
+          }
+        } else if (
+          persistedBackendSessionId &&
+          (!cur.session_id || cur.session_id === persistedBackendSessionId)
+        ) {
+          // The server has already ended this session while the app was
+          // away. Mirror its terminal status locally so the UI cannot keep
+          // presenting an active emergency after reload.
+          const terminal =
+            cur.status === "TIMED_OUT"
+              ? "timed_out"
+              : cur.status === "CANCELLED"
+                ? "cancelled"
+                : "completed";
+          dispatch({ type: "stop", now: Date.now(), status: terminal });
+          setBackendSessionId(null);
+        }
       } catch {
         /* offline — nothing to reconcile yet */
       }
@@ -191,7 +244,7 @@ export default function HomeScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [hasActiveSession, persistedBackendSessionId, dispatch]);
   useEffect(() => {
     if (!activeId) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -261,9 +314,7 @@ export default function HomeScreen() {
         });
       }
     });
-    const hb = setInterval(() => {
-      if (backendSessionId)
-        void backendHeartbeat(backendSessionId).catch(() => undefined);
+    const flush = setInterval(() => {
       void flushOutbox()
         .then((r) => {
           if (!cancelled) setQueuedCount(r.pending);
@@ -272,7 +323,7 @@ export default function HomeScreen() {
     }, 60000);
     return () => {
       cancelled = true;
-      clearInterval(hb);
+      clearInterval(flush);
       void stopBackgroundTracking();
     };
   }, [backendSessionId, activeId]);
@@ -286,16 +337,17 @@ export default function HomeScreen() {
   const [backendPriority, setBackendPriority] = useState<
     "requested" | "released" | null
   >(null);
-  const [backendError, setBackendError] = useState(false);
+  const [stopPending, setStopPending] = useState(false);
+  const seenBackendCommandsRef = useRef<Set<string>>(new Set());
   const [serverEnded, setServerEnded] = useState<string | null>(null);
   // Real nearest junction from the backend GPS response; GET /junctions
   // resolves the server-side name for the id.
   const [nearbyJunction, setNearbyJunction] = useState<NearbyJunction | null>(
     null,
   );
-  const [junctionNames, setJunctionNames] = useState<
-    Record<string, string>
-  >({});
+  const [junctionNames, setJunctionNames] = useState<Record<string, string>>(
+    {},
+  );
   const nearest = nearbyJunction
     ? {
         name: junctionNames[nearbyJunction.junction_id] ?? "Junction",
@@ -329,6 +381,14 @@ export default function HomeScreen() {
     // trigger signal-priority commands at the wrong junction. Skip posting
     // while GPS is unusable and surface the weak-GPS state in the footer.
     if (!gpsUsable || liveFresh === null) return;
+    // Throttle: GPS fires ~every 3s; skip if the previous POST is still
+    // in-flight or finished <2.5s ago (prevents overlapping/out-of-order fixes
+    // on slow networks).
+    const now = Date.now();
+    if (gpsPostInFlightRef.current) return;
+    if (now - lastGpsPostAtRef.current < 2500) return;
+    gpsPostInFlightRef.current = true;
+    lastGpsPostAtRef.current = now;
     let cancelled = false;
     const t0 = Date.now();
     void backendGps(backendSessionId, {
@@ -337,6 +397,7 @@ export default function HomeScreen() {
       accuracy: liveFresh.accuracy,
       speed: liveFresh.speed,
       heading: liveFresh.heading,
+      timestamp: liveFresh.timestamp,
     })
       .then((res) => {
         if (cancelled) return;
@@ -354,7 +415,14 @@ export default function HomeScreen() {
                   t === "OVERRIDE_HOLD"
                 ? "released"
                 : null;
-        if (!res.duplicate && kind && res.command) {
+        if (
+          !res.duplicate &&
+          res.should_publish !== false &&
+          kind &&
+          res.command &&
+          !seenBackendCommandsRef.current.has(res.command.id)
+        ) {
+          seenBackendCommandsRef.current.add(res.command.id);
           // The events sheet shows the backend's real command stream.
           dispatch({
             type: "sessionEvent",
@@ -385,16 +453,26 @@ export default function HomeScreen() {
           // into 409s forever while the UI claims "Emergency Active".
           setBackendSessionId(null);
           setBackendPriority(null);
-          dispatch({ type: "stop", now: Date.now() });
+          const terminal =
+            res.status === "TIMED_OUT"
+              ? "timed_out"
+              : res.status === "CANCELLED"
+                ? "cancelled"
+                : "completed";
+          dispatch({ type: "stop", now: Date.now(), status: terminal });
           setServerEnded(res.status);
           setDialog("ended");
         }
       })
       .catch(() => {
         if (!cancelled) setBackendError(true);
+      })
+      .finally(() => {
+        gpsPostInFlightRef.current = false;
       });
     return () => {
       cancelled = true;
+      gpsPostInFlightRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendSessionId, liveFixAt, gpsUsable]);
@@ -415,6 +493,8 @@ export default function HomeScreen() {
           ? "Priority Released"
           : "Ready for Emergency";
   const startingRef = useRef(false);
+  const gpsPostInFlightRef = useRef(false);
+  const lastGpsPostAtRef = useRef(0);
   // Hospital picker (GET /hospitals, free-text fallback) + destination coords.
   const [hospitalOptions, setHospitalOptions] = useState<
     {
@@ -525,7 +605,10 @@ export default function HomeScreen() {
   // then the session's last known position; the link is included only when
   // real coordinates exist. Never throws — SMS handoff is best-effort.
   const sendNotifySms = async () => {
-    const lastKnown = { latitude: location.latitude, longitude: location.longitude };
+    const lastKnown = {
+      latitude: location.latitude,
+      longitude: location.longitude,
+    };
     let coords = liveFix?.fix
       ? { latitude: liveFix.fix.latitude, longitude: liveFix.fix.longitude }
       : lastKnown;
@@ -533,7 +616,10 @@ export default function HomeScreen() {
       const pos = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
-      coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+      coords = {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      };
     } catch {
       /* unpermitted/unavailable — keep the last known position */
     }
@@ -557,60 +643,152 @@ export default function HomeScreen() {
   const start = () => {
     if (startingRef.current) return; // no double-tap: two backendStarts
     startingRef.current = true;
+    seenBackendCommandsRef.current.clear();
     // A fresh session begins: re-arm the once-per-session emergency-contacts
     // notify prompt (it is set when the prompt is shown, never mid-session).
     notifiedThisSessionRef.current = false;
-    // Real backend session first; the local record only mirrors what the
-    // backend confirms (plus real GPS fixes) so the UI shows live truth.
+    // Backend-first: the local record only mirrors what the backend confirms
+    // so the UI never shows "Emergency Active" with no priority. Offline
+    // starts require explicit confirmation via the offline dialog.
     (async () => {
+      const startLocalOnly = () => {
+        dispatch({
+          type: "start",
+          now: Date.now(),
+          seed: liveFresh
+            ? { latitude: liveFresh.latitude, longitude: liveFresh.longitude }
+            : undefined,
+        });
+        setBackendError(true);
+        setDialog(null);
+        maybeNotifyContacts();
+      };
       try {
         if (await isBackendLinked()) {
           // Reuse a reconciled in-progress backend session instead of
           // starting a second one server-side (see mount reconcile above).
-          if (backendSessionId) return;
+          if (backendSessionId) {
+            dispatch({
+              type: "start",
+              backendSessionId,
+              now: Date.now(),
+              seed: liveFresh
+                ? {
+                    latitude: liveFresh.latitude,
+                    longitude: liveFresh.longitude,
+                  }
+                : undefined,
+            });
+            setDialog(null);
+            maybeNotifyContacts();
+            return;
+          }
           try {
             const amb = await apiMyAmbulance();
             const s = await backendStart(amb.id, state.ambulance.hospital);
             setBackendSessionId(s.session_id);
-          } catch {
+            dispatch({
+              type: "start",
+              backendSessionId: s.session_id,
+              now: Date.now(),
+              seed: liveFresh
+                ? {
+                    latitude: liveFresh.latitude,
+                    longitude: liveFresh.longitude,
+                  }
+                : undefined,
+            });
+            setDialog(null);
+            maybeNotifyContacts();
+          } catch (startError) {
             // 409 conflict (the server already has an active session for
             // this driver) or a transient failure: reconcile instead of
             // deadlocking on a stale/absent session id.
             try {
               const cur = await backendCurrent();
-              setBackendSessionId(cur.active ? cur.session_id : null);
-            } catch {
-              setBackendSessionId(null);
+              if (cur.active && cur.session_id) {
+                setBackendSessionId(cur.session_id);
+                dispatch({
+                  type: "start",
+                  backendSessionId: cur.session_id,
+                  now: Date.now(),
+                  seed: liveFresh
+                    ? {
+                        latitude: liveFresh.latitude,
+                        longitude: liveFresh.longitude,
+                      }
+                    : undefined,
+                });
+                setDialog(null);
+                maybeNotifyContacts();
+              } else {
+                // No backend session — do NOT start a local-only emergency
+                // silently. Surface the failure so the driver retries.
+                setBackendSessionId(null);
+                setBackendError(true);
+                setDialog("ended");
+              }
+            } catch (currentError) {
+              const isNetworkFailure = (error: unknown) =>
+                typeof error === "object" &&
+                error !== null &&
+                "code" in error &&
+                (error as { code?: unknown }).code === "NETWORK_ERROR";
+              if (
+                isNetworkFailure(startError) ||
+                isNetworkFailure(currentError)
+              ) {
+                // A signed-in driver may keep a local route alive while the
+                // control center is unreachable. No backend session exists,
+                // so this cannot create untracked server-side priority.
+                setBackendSessionId(null);
+                startLocalOnly();
+              } else {
+                setBackendSessionId(null);
+                setBackendError(true);
+                setDialog("ended");
+              }
             }
           }
+        } else {
+          // Fully offline build: local-only tracking has no backend priority.
+          startLocalOnly();
         }
       } finally {
         startingRef.current = false;
       }
     })();
-    dispatch({
-      type: "start",
-      now: Date.now(),
-      seed: liveFresh
-        ? { latitude: liveFresh.latitude, longitude: liveFresh.longitude }
-        : undefined,
-    });
-    setDialog(null);
-    maybeNotifyContacts();
   };
-  const stop = () => {
-    if (backendSessionId) {
-      const sid = backendSessionId;
-      setBackendSessionId(null);
-      setBackendPriority(null);
-      // backendStop clears the module-level session id in services/emergency.ts
-      // on success; on failure it stays tracked and we re-track it here so
-      // logout/unmount cleanup can retry ending the server-side session.
-      void backendStop(sid).catch(() => retrackBackendSession(sid));
+  const stop = async () => {
+    if (stopPending) return;
+    setStopPending(true);
+    setStopError(false);
+    try {
+      if (backendSessionId) {
+        const sid = backendSessionId;
+        const result = await backendStop(sid);
+        if (result.release_pending) {
+          // The session is terminal in the database, but the junction may
+          // still be holding priority. Keep the local emergency visible and
+          // ask the driver to retry instead of claiming the road is normal.
+          retrackBackendSession(sid);
+          setBackendError(true);
+          setStopError(true);
+          return;
+        }
+        setBackendSessionId(null);
+        setBackendPriority(null);
+      }
+      dispatch({ type: "stop", now: Date.now() });
+      setServerEnded(null);
+      setDialog(null);
+    } catch {
+      if (backendSessionId) retrackBackendSession(backendSessionId);
+      setBackendError(true);
+      setStopError(true);
+    } finally {
+      setStopPending(false);
     }
-    dispatch({ type: "stop", now: Date.now() });
-    setServerEnded(null);
-    setDialog(null);
   };
   // If the app unmounts mid-session (logout tears down the tabs, or the root
   // layout is disposed), end the backend session so it cannot outlive the
@@ -1041,11 +1219,14 @@ export default function HomeScreen() {
             <Txt>
               {dialog === "start"
                 ? "Begin live tracking and request traffic signal priority for your route."
-                : "End this emergency, release priority, and save the session to History."}
+                : stopError
+                  ? "The backend did not confirm release. Keep this screen open and retry Stop Emergency."
+                  : "End this emergency, release priority, and save the session to History."}
             </Txt>
             <Button
               title={dialog === "start" ? "Start Emergency" : "Stop Emergency"}
               tone="red"
+              loading={dialog === "stop" && stopPending}
               onPress={dialog === "start" ? start : stop}
             />
             <Button
@@ -1109,9 +1290,14 @@ export default function HomeScreen() {
               placeholder="Age, condition, vitals…"
             />
             <Field
-              label="Severity (stable / urgent / critical)"
+              label="Severity"
               value={patientSeverity}
-              onChangeText={setPatientSeverity}
+              onChangeText={(v) => {
+                const next = v.trim().toLowerCase();
+                if (["stable", "urgent", "critical", ""].includes(next))
+                  setPatientSeverity(next || "stable");
+              }}
+              placeholder="stable / urgent / critical"
             />
             <Button
               title={

@@ -6,10 +6,10 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type MouseEvent } from "react";
-import { createJunction, getJunction, listJunctions, overrideJunction } from "@/services/portal";
+import { useState } from "react";
+import { createJunction, deleteJunction, getJunction, listJunctions, overrideJunction, patchJunction } from "@/services/portal";
 import type { JunctionSummary, OverrideResult } from "@/types/portal";
-import { Card, Drawer, Empty, Field, PageHeader, Table, Txt, type TableColumn } from "@/components/ui";
+import { Badge, Card, Drawer, Empty, Field, PageHeader, Table, Txt, type TableColumn } from "@/components/ui";
 import { errMsg, shortId, timelineTone } from "@/pages/admin/shared";
 import {
   ErrorCard,
@@ -31,12 +31,7 @@ export function JunctionsPage() {
   const items = junctions.data ?? [];
   const selected = items.find((j) => j.id === selectedId) ?? null;
 
-  const onRowClick = (e: MouseEvent<HTMLDivElement>) => {
-    const tr = (e.target as HTMLElement).closest("tr");
-    if (!tr || tr.rowIndex === 0) return;
-    const row = items[tr.rowIndex - 1];
-    if (row) setSelectedId(row.id);
-  };
+  const onRowSelect = (row: (typeof items)[number]) => setSelectedId(row.id);
 
   const columns: TableColumn<JunctionSummary>[] = [
     {
@@ -64,6 +59,21 @@ export function JunctionsPage() {
         </Txt>
       ),
     },
+    {
+      key: "radius",
+      header: "Radius",
+      render: (j) => `${j.radius_m ?? 500}m`,
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (j) => (
+        <Badge
+          label={j.is_active === false ? "INACTIVE" : "ACTIVE"}
+          tone={j.is_active === false ? "red" : "green"}
+        />
+      ),
+    },
   ];
 
   return (
@@ -85,11 +95,12 @@ export function JunctionsPage() {
       ) : junctions.isLoading ? (
         <LoadingBlock label="Loading junctions" />
       ) : (
-        <div className="admin-row-click" onClick={onRowClick}>
+        <div>
           <Table
             columns={columns}
             rows={items}
             keyOf={(j) => j.id}
+            onRowClick={onRowSelect}
             emptyFallback={
               <Empty
                 icon="traffic"
@@ -190,6 +201,7 @@ function JunctionConsole({ junction }: { junction: JunctionSummary }) {
 
   return (
     <>
+      <JunctionEditForm junction={junction} />
       <Card>
         <Txt as="div" style={{ fontWeight: 600, marginBottom: 8 }}>
           Approaches
@@ -296,5 +308,61 @@ function JunctionConsole({ junction }: { junction: JunctionSummary }) {
         </Card>
       )}
     </>
+  );
+}
+
+function JunctionEditForm({ junction }: { junction: JunctionSummary }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(junction.name);
+  const initialRadius = junction.radius_m ?? 500;
+  const initialActive = junction.is_active ?? true;
+  const [radius, setRadius] = useState(String(initialRadius));
+  const [active, setActive] = useState(initialActive);
+  const [msg, setMsg] = useState<string | null>(null);
+  const patch = useMutation({
+    mutationFn: () => {
+      const body: Record<string, unknown> = {};
+      if (name.trim() && name.trim() !== junction.name) body.name = name.trim();
+      if (radius.trim() && Number(radius) !== initialRadius) body.radius_m = Number(radius);
+      if (active !== initialActive) body.is_active = active;
+      return patchJunction(junction.id, body as never);
+    },
+    onSuccess: () => {
+      setMsg("Saved.");
+      void qc.invalidateQueries({ queryKey: ["admin", "junctions"] });
+      void qc.invalidateQueries({ queryKey: ["admin", "junction", junction.id] });
+    },
+    onError: (e) => setMsg(errMsg(e)),
+  });
+  const del = useMutation({
+    mutationFn: () => deleteJunction(junction.id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin", "junctions"] });
+    },
+    onError: (e) => setMsg(errMsg(e)),
+  });
+  return (
+    <Card>
+      <Txt as="div" style={{ fontWeight: 600, marginBottom: 8 }}>Edit junction</Txt>
+      <Field label="Name" value={name} onChange={(e) => setName(e.target.value)} />
+      <Field label="Radius (m, 10–500)" value={radius} onChange={(e) => setRadius(e.target.value)} placeholder="e.g. 300" />
+      <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+        <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
+        Active
+      </label>
+      {msg ? <Txt muted>{msg}</Txt> : null}
+      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+        <MiniButton title="Save" loading={patch.isPending} onClick={() => patch.mutate()} />
+        <MiniButton
+          tone="danger"
+          title="Delete"
+          loading={del.isPending}
+          onClick={() => {
+            if (confirm(`Delete junction ${junction.name}? Only junctions without history can be deleted.`)) del.mutate();
+          }}
+        />
+      </div>
+      <Txt muted>Deactivation releases open priorities and blocks new ones; delete works only for unused junctions.</Txt>
+    </Card>
   );
 }

@@ -37,7 +37,11 @@ import {
   pickContact,
   saveContacts,
 } from "@/services/contacts";
-import { stopActiveBackendSession } from "@/services/emergency";
+import {
+  backendCurrent,
+  retrackBackendSession,
+  stopActiveBackendSession,
+} from "@/services/emergency";
 import { unregisterTokenFromBackend } from "@/services/notifications";
 import type { Ambulance, Driver, EmergencyContact } from "@/types/models";
 type Dialog =
@@ -95,9 +99,6 @@ function BackendAccount() {
       <SectionTitle>
         <Icon name="server" /> Backend Account
       </SectionTitle>
-      {info.name ? (
-        <Detail icon="account" label="Name" value={info.name} />
-      ) : null}
       <Detail icon="email" label="Login Email" value={info.email} />
       {info.phone ? (
         <Detail icon="phone" label="Phone" value={info.phone} />
@@ -472,6 +473,7 @@ export default function ProfileScreen() {
   const [pwCurrent, setPwCurrent] = useState("");
   const [pwNext, setPwNext] = useState("");
   const [pwMsg, setPwMsg] = useState("");
+  const [logoutError, setLogoutError] = useState("");
   // Saved emergency contacts — null until loaded from the backend, so the
   // card stays invisible when the contacts backend is unreachable.
   const [contacts, setContacts] = useState<EmergencyContact[] | null>(null);
@@ -565,18 +567,40 @@ export default function ProfileScreen() {
       )
       .catch(() => undefined);
   }
-  function logout() {
+  async function logout() {
     // End the backend emergency session (if any) BEFORE revoking tokens so
-    // the server-side session never outlives the login. Best effort — local
-    // logout always proceeds so the user is never stuck offline.
-    void stopActiveBackendSession()
-      .catch(() => undefined)
-      .then(() => unregisterTokenFromBackend().catch(() => false))
-      .then(() => apiLogout())
-      .finally(() => {
-        dispatch({ type: "logout", now: Date.now() });
-        setDialog(null);
+    // the server-side session never outlives the login. Keep the user signed
+    // in when release publication is still pending.
+    setLogoutError("");
+    let backendLookupFailed = false;
+    if (state.active?.backendSessionId) {
+      retrackBackendSession(state.active.backendSessionId);
+    } else if (await isBackendLinked()) {
+      // Profile can be opened directly after a cold launch, before HomeScreen
+      // has had a chance to reconcile the persisted backend session id.
+      await backendCurrent().catch(() => {
+        backendLookupFailed = true;
       });
+    }
+    if (backendLookupFailed && state.active) {
+      setLogoutError(
+        "Cannot verify the emergency session. Reconnect and retry.",
+      );
+      return;
+    }
+    if (!(await stopActiveBackendSession())) {
+      setLogoutError(
+        "Backend release is still pending. Retry after reconnecting.",
+      );
+      return;
+    }
+    try {
+      await unregisterTokenFromBackend().catch(() => false);
+      await apiLogout().catch(() => undefined);
+    } finally {
+      dispatch({ type: "logout", now: Date.now() });
+      setDialog(null);
+    }
   }
   return (
     <Page>
@@ -598,7 +622,7 @@ export default function ProfileScreen() {
           </Txt>
           <Txt style={{ fontSize: 13, lineHeight: 17 }}>Ambulance Driver</Txt>
           <Txt muted style={{ fontSize: 11, lineHeight: 16 }}>
-            Driver ID: {driver.id}
+            Account ID: {driver.id}
           </Txt>
           <Badge label="Verified Driver" />
         </View>
@@ -817,6 +841,18 @@ export default function ProfileScreen() {
             <Button
               title="Change Password"
               onPress={() => {
+                if (!pwCurrent) {
+                  setPwMsg("Enter your current password.");
+                  return;
+                }
+                if (pwNext.length < 8) {
+                  setPwMsg("New password must be at least 8 characters.");
+                  return;
+                }
+                if (pwNext === pwCurrent) {
+                  setPwMsg("New password must differ from the current one.");
+                  return;
+                }
                 setPwMsg("");
                 void apiChangePassword(pwCurrent, pwNext)
                   .then(() => {
@@ -849,20 +885,34 @@ export default function ProfileScreen() {
               For account or ambulance assignment changes, contact your hospital
               administrator.
             </Txt>
-            <Button
-              title="Call Support"
-              tone="quiet"
-              onPress={() => void Linking.openURL(`tel:${SUPPORT_PHONE}`)}
-            />
-            <Button
-              title="Email Support"
-              tone="quiet"
-              onPress={() => void Linking.openURL(`mailto:${SUPPORT_EMAIL}`)}
-            />
+            {SUPPORT_PHONE ? (
+              <Button
+                title="Call Support"
+                tone="quiet"
+                onPress={() => void Linking.openURL(`tel:${SUPPORT_PHONE}`)}
+              />
+            ) : null}
+            {SUPPORT_EMAIL ? (
+              <Button
+                title="Email Support"
+                tone="quiet"
+                onPress={() => void Linking.openURL(`mailto:${SUPPORT_EMAIL}`)}
+              />
+            ) : null}
+            {!SUPPORT_PHONE && !SUPPORT_EMAIL ? (
+              <Txt muted>
+                Support contacts are not configured in this build.
+              </Txt>
+            ) : null}
           </>
         )}
         {dialog === "logout" && (
           <>
+            {logoutError ? (
+              <Txt accessibilityRole="alert" style={{ color: c.red }}>
+                {logoutError}
+              </Txt>
+            ) : null}
             <Txt>
               An emergency is active. Logging out will end it, release priority,
               and save it to History.
