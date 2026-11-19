@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from pydantic import field_validator
@@ -30,6 +31,13 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://localhost:8081"
     ENVIRONMENT: str = "dev"
     DEVICE_OFFLINE_AFTER_SECONDS: int = 120
+
+    # ---- Portal (dashboard) ----
+    DEMO_MODE: bool = False  # env DEMO_MODE=1 → isolated simulator mode (plan §4.7)
+    PORTAL_ACCESS_TOKEN_MINUTES: int = 15
+    PORTAL_REFRESH_EXPIRE_DAYS: int = 7
+    GPS_STALE_SECONDS: int = 30  # GPS fixes older than this render as "Stale GPS"
+    PORTAL_STALE_SECONDS: int = 30  # no successful refresh for this long → stale banner
 
     DEFAULT_JUNCTION_RADIUS_M: float = 500.0
     COMMAND_TTL_SECONDS: int = 60
@@ -99,7 +107,27 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    # Demo mode must never read the developer's live server/.env (plan §4.7):
+    # every value comes from the process environment, which the demo runner
+    # sets explicitly (DEMO_MODE=1, mock MQTT, localhost *demo* database).
+    if os.environ.get("DEMO_MODE", "").lower() in ("1", "true", "yes"):
+        return Settings(_env_file=None)
     return Settings()
+
+
+def _is_local_demo_db(url: str) -> bool:
+    """True when the DB URL points at a localhost database named *demo*."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    host = (parts.hostname or "").lower()
+    if host not in ("localhost", "127.0.0.1", "::1"):
+        return False
+    dbname = (parts.path or "").lstrip("/").lower()
+    return "demo" in dbname
 
 
 def validate_startup_config() -> list[str]:
@@ -108,6 +136,34 @@ def validate_startup_config() -> list[str]:
 
     s = get_settings()
     warnings: list[str] = []
+    if os.environ.get("DEMO_MODE", "").lower() in ("1", "true", "yes"):
+        # Demo mode is a hard sandbox: dev environment, mock MQTT, no real push
+        # credentials, and a LOCAL database whose name contains "demo". Anything
+        # else fails closed (plan §4.7).
+        if s.ENVIRONMENT.lower() not in ("dev", "development"):
+            raise AppError(
+                "DEMO_MODE requires ENVIRONMENT=dev", code="BAD_CONFIG", status_code=500
+            )
+        if s.mqtt_is_real:
+            raise AppError(
+                "DEMO_MODE requires MQTT_PROVIDER=mock (no real broker)",
+                code="BAD_CONFIG",
+                status_code=500,
+            )
+        if s.FIREBASE_CREDENTIALS_PATH:
+            raise AppError(
+                "DEMO_MODE must not configure real push credentials",
+                code="BAD_CONFIG",
+                status_code=500,
+            )
+        for name in ("DATABASE_URL", "SYNC_DATABASE_URL"):
+            if not _is_local_demo_db(getattr(s, name)):
+                raise AppError(
+                    f"DEMO_MODE requires {name} to point at a local *demo* database "
+                    "(localhost/127.0.0.1 and db name containing 'demo')",
+                    code="BAD_CONFIG",
+                    status_code=500,
+                )
     if s.is_prod and len(s.JWT_SECRET) < 32:
         raise AppError(
             "JWT_SECRET must be >= 32 chars in production", code="BAD_CONFIG", status_code=500

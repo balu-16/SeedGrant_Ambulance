@@ -2,53 +2,30 @@
  * Centralized backend API client (FastAPI, `/api/v1`) — web mirror of
  * client/services/api.ts.
  *
- * Single place for the base URL, auth headers, single-flight token refresh,
- * envelope unwrapping ({ success, data, error: { code, message } }) and error
- * mapping. Pages/services must use this module — no hardcoded URLs elsewhere.
+ * Single place for envelope unwrapping ({ success, data, error: { code,
+ * message } }) and error mapping. Auth state lives in services/portalAuth.ts:
+ * the access token is held in module memory only; on 401 the client runs a
+ * single-flight POST /portal-auth/refresh (cookie + X-CSRF-Token) and retries
+ * once — when the refresh fails mid-session the session is cleared and every
+ * tab is told via BroadcastChannel("portal-auth") {type:"expired"}.
  *
  * In dev, Vite proxies `/api` → http://localhost:8000 (see vite.config.ts).
  * In production (Vercel) the backend URL comes from `VITE_API_URL`
  * (e.g. https://seedgrant-backend.onrender.com/api/v1).
  */
 
+import { API_BASE, TIMEOUT_MS } from "@/services/apiBase";
+import { ApiError } from "@/services/ApiError";
 import {
-  clearTokens,
-  getTokens,
-  saveTokens,
-} from "@/services/tokenStorage";
-import type { ApiEnvelope, AuthUser, LoginResponse, Tokens } from "@/types/api";
+  getAccessToken,
+  notifySessionExpired,
+  readCsrfToken,
+  trySessionRefresh,
+} from "@/services/portalAuth";
+import type { ApiEnvelope, AuthUser } from "@/types/api";
 import { normalizeRole } from "@/types/api";
 
-export { clearTokens, getTokens, saveTokens } from "@/services/tokenStorage";
-
-function normalizeBase(raw: string | undefined): string {
-  let b = (raw ?? "").trim().replace(/\/+$/, "");
-  if (!b) return "/api/v1";
-  // Accept bare origin (…onrender.com) or full prefix (…/api/v1); never double it.
-  if (!/\/api\/v1$/i.test(b)) b += "/api/v1";
-  return b;
-}
-
-const API_BASE = normalizeBase(
-  import.meta.env.VITE_API_URL as string | undefined,
-);
-
-if (import.meta.env.PROD && API_BASE === "/api/v1") {
-  console.warn(
-    "VITE_API_URL is unset — admin portal will call same-origin /api/v1 and fail. Set VITE_API_URL=https://seedgrant-backend.onrender.com/api/v1 in Vercel.",
-  );
-}
-
-export class ApiError extends Error {
-  status: number;
-  code: string;
-  constructor(message: string, status = 0, code = "UNKNOWN") {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.code = code;
-  }
-}
+export { ApiError } from "@/services/ApiError";
 
 interface RequestOptions {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -57,45 +34,10 @@ interface RequestOptions {
   auth?: boolean;
   /** Retry once after refresh on 401 (default true). */
   retry?: boolean;
-}
-
-/**
- * Single-flight refresh: concurrent 401s share one POST /auth/refresh call,
- * so a burst of expired requests never burns several refresh tokens.
- */
-let refreshInFlight: Promise<boolean> | null = null;
-
-function tryRefresh(refreshToken: string): Promise<boolean> {
-  if (!refreshInFlight) {
-    refreshInFlight = (async () => {
-      try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 15000);
-        let res: Response;
-        try {
-          res = await fetch(`${API_BASE}/auth/refresh`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ refresh_token: refreshToken }),
-            signal: ctrl.signal,
-          });
-        } finally {
-          clearTimeout(timer);
-        }
-        const payload = (await res.json()) as ApiEnvelope<Tokens>;
-        if (res.ok && payload.success && payload.data?.access_token) {
-          saveTokens(payload.data);
-          return true;
-        }
-        return false;
-      } catch {
-        return false;
-      } finally {
-        refreshInFlight = null;
-      }
-    })();
-  }
-  return refreshInFlight;
+  /** Send cookies (default "same-origin" — the fetch default). */
+  credentials?: RequestCredentials;
+  /** Attach X-CSRF-Token from the portal_csrf cookie. */
+  csrf?: boolean;
 }
 
 /** Core request client — exported for sibling services (next phases). */
@@ -103,9 +45,15 @@ export async function request<T>(
   path: string,
   opts: RequestOptions = {},
 ): Promise<T> {
-  const { method = "GET", body, auth = true, retry = true } = opts;
-  const tokens = auth ? getTokens() : null;
-  const TIMEOUT_MS = 15000;
+  const {
+    method = "GET",
+    body,
+    auth = true,
+    retry = true,
+    credentials = "same-origin",
+    csrf = false,
+  } = opts;
+  const token = auth ? getAccessToken() : null;
   let res: Response;
   try {
     const ctrl = new AbortController();
@@ -115,9 +63,11 @@ export async function request<T>(
         method,
         headers: {
           "Content-Type": "application/json",
-          ...(tokens ? { Authorization: `Bearer ${tokens.access_token}` } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(csrf ? { "X-CSRF-Token": readCsrfToken() ?? "" } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        credentials,
         signal: ctrl.signal,
       });
     } finally {
@@ -135,12 +85,14 @@ export async function request<T>(
     );
   }
   // Refresh once on expired access token, then retry the original request.
-  if (res.status === 401 && auth && retry && tokens) {
-    const refreshed = await tryRefresh(tokens.refresh_token);
+  if (res.status === 401 && auth && retry) {
+    const refreshed = await trySessionRefresh();
     if (refreshed) {
       return request<T>(path, { ...opts, retry: false });
     }
-    clearTokens();
+    // Session is gone (revoked/expired) — clear local state and tell the
+    // other tabs so no stale authenticated screen survives.
+    notifySessionExpired();
     throw new ApiError(
       "Session expired — please log in again",
       401,
@@ -167,37 +119,10 @@ export async function request<T>(
   return payload.data;
 }
 
-// ---- Auth (backend field names match server schemas) ----
+// ---- Auth verification ----
 
-export async function apiLogin(
-  email: string,
-  password: string,
-): Promise<LoginResponse> {
-  const data = await request<LoginResponse>("/auth/login", {
-    method: "POST",
-    body: { email, password },
-    auth: false,
-    retry: false,
-  });
-  saveTokens({
-    access_token: data.access_token,
-    refresh_token: data.refresh_token,
-  });
-  data.user = { ...data.user, role: normalizeRole(data.user.role) };
-  return data;
-}
-
+/** GET /auth/me — re-verify the signed-in account server-side. */
 export async function apiMe(): Promise<AuthUser> {
   const me = await request<AuthUser>("/auth/me");
   return { ...me, role: normalizeRole(me.role) };
-}
-
-export async function apiLogout(): Promise<void> {
-  try {
-    await request("/auth/logout", { method: "POST", retry: false });
-  } catch {
-    // Best effort — tokens are cleared regardless (see below).
-  } finally {
-    clearTokens();
-  }
 }

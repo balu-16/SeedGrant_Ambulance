@@ -149,6 +149,59 @@
   color: #ff8b93;
 }
 
+/* Narrow-screen menu toggle — hidden on desktop, shown by the media query. */
+.sidebar-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--white);
+  color: var(--navy);
+}
+
+.sidebar-toggle:hover {
+  background: var(--blue-light);
+}
+
+/* ---- Collapsible nav (plan §3.4): sidebar becomes an overlay drawer ---- */
+@media (max-width: 860px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    height: 100vh;
+    z-index: 50;
+    transform: translateX(-105%);
+    transition: transform 0.25s ease;
+    box-shadow: -8px 0 30px rgba(10, 27, 70, 0.18);
+  }
+
+  .shell--nav-open .sidebar {
+    transform: translateX(0);
+  }
+
+  .sidebar-toggle {
+    display: inline-flex;
+  }
+
+  .topbar {
+    padding: 14px 16px 10px;
+  }
+
+  .topbar .page-head-title {
+    font-size: 21px;
+    line-height: 27px;
+  }
+
+  .content {
+    padding: 10px 16px 28px;
+  }
+}
+
 /* ---- Main column ---- */
 .main {
   flex: 1;

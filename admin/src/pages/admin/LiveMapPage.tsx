@@ -3,18 +3,18 @@
  * latest GPS (red, pulsing) on OpenStreetMap tiles; clicking a session marker
  * or list row opens the right drawer with session info, its command timeline
  * and a small static map of the latest fix. Live data polls every 10s.
+ *
+ * Freshness (contract §9): "Last updated Xs ago" caption, stale banner past
+ * portal_stale_seconds, "Stale GPS" badge past gps_stale_seconds, junction
+ * signal state renders "Unknown" when the latest telemetry has no state, and
+ * a failed refetch keeps the previous data with an error banner (never an
+ * empty/zero state).
  */
 
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import * as L from "leaflet";
-import {
-  MapContainer,
-  Marker,
-  Popup,
-  TileLayer,
-  useMap,
-} from "react-leaflet";
+import { MapContainer, Marker, Popup, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 import { fetchLive, listJunctions } from "@/services/portal";
@@ -34,6 +34,13 @@ import {
 } from "@/components/ui";
 import { fmtAgo, fmtDateTime, shortId, timelineTone } from "@/pages/admin/shared";
 import { ErrorCard, KVList, LoadingBlock } from "@/pages/admin/widgets";
+import { TileLayerGuard } from "@/pages/shared/MapView";
+import {
+  FreshnessCaption,
+  GpsStaleBadge,
+  StaleBanner,
+} from "@/pages/shared/bits";
+import { isStale, useFreshnessThresholds } from "@/pages/shared/freshness";
 import "@/pages/admin/admin.css";
 
 const OSM_ATTR =
@@ -69,6 +76,7 @@ function Recenter({ lat, lng, zoom }: { lat: number; lng: number; zoom: number }
 }
 
 export function LiveMapPage() {
+  const thresholds = useFreshnessThresholds();
   const junctions = useQuery({
     queryKey: ["admin", "junctions"],
     queryFn: listJunctions,
@@ -77,6 +85,7 @@ export function LiveMapPage() {
     queryKey: ["admin", "live"],
     queryFn: fetchLive,
     refetchInterval: 10_000,
+    placeholderData: keepPreviousData,
   });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -84,7 +93,11 @@ export function LiveMapPage() {
   const junctionData = junctions.data;
   const sessions = useMemo(() => liveItems ?? [], [liveItems]);
   const junctionItems = useMemo(() => junctionData ?? [], [junctionData]);
+  const junctionStates = live.data?.junction_states ?? {};
   const selected = sessions.find((s) => s.id === selectedId) ?? null;
+  const stale =
+    live.data !== undefined &&
+    isStale(live.dataUpdatedAt, thresholds.portalStaleSeconds);
 
   const center = useMemo<[number, number]>(() => {
     const withFix = sessions.find((s) => s.latest_gps !== null);
@@ -108,20 +121,41 @@ export function LiveMapPage() {
         subtitle="Active emergencies and junction states on one map"
       />
 
+      {/* A failed refetch keeps the previous map + list and shows a banner. */}
       {live.isError && (
         <ErrorCard
-          title="Could not load live sessions"
+          title="Could not refresh live sessions — showing the last loaded positions"
           error={live.error}
           onRetry={() => void live.refetch()}
         />
       )}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          flexWrap: "wrap",
+        }}
+      >
+        {live.data && (
+          <Txt muted>
+            {live.data.total > sessions.length && live.data.cap > 0
+              ? `Showing ${sessions.length} of ${live.data.total} active sessions (cap ${live.data.cap}) · `
+              : `${sessions.length} active session${sessions.length === 1 ? "" : "s"} · `}
+            observed {fmtAgo(live.data.observed_at)}
+          </Txt>
+        )}
+        <FreshnessCaption updatedAt={live.dataUpdatedAt} />
+      </div>
+      <StaleBanner stale={stale} />
 
       <div className="admin-map-grid">
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <SectionTitle>Sessions ({sessions.length})</SectionTitle>
-          {live.isLoading ? (
+          {live.isPending && !live.data ? (
             <LoadingBlock label="Loading sessions" />
-          ) : sessions.length === 0 ? (
+          ) : sessions.length === 0 && !live.isError ? (
             <Empty
               icon="emergency"
               title="No active sessions"
@@ -151,6 +185,37 @@ export function LiveMapPage() {
                 </button>
               ))}
             </div>
+          )}
+
+          {Object.keys(junctionStates).length > 0 && (
+            <Card>
+              <Txt as="div" style={{ fontWeight: 600, marginBottom: 6 }}>
+                Junctions
+              </Txt>
+              {Object.entries(junctionStates).map(([jid, state]) => (
+                <div
+                  key={jid}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    flexWrap: "wrap",
+                    padding: "5px 0",
+                  }}
+                >
+                  <Txt style={{ flex: 1, minWidth: 120 }}>{state.name}</Txt>
+                  <Badge
+                    label={state.online ? "ONLINE" : "OFFLINE"}
+                    tone={state.online ? "green" : "red"}
+                  />
+                  {/* Contract §5: telemetry without a state key → "Unknown". */}
+                  <Badge
+                    label={state.state ?? "Unknown"}
+                    tone={state.state ? statusTone(state.state) : "neutral"}
+                  />
+                </div>
+              ))}
+            </Card>
           )}
 
           <Card style={{ marginTop: 2 }}>
@@ -188,7 +253,7 @@ export function LiveMapPage() {
             scrollWheelZoom
             style={{ height: "100%", width: "100%" }}
           >
-            <TileLayer attribution={OSM_ATTR} url={OSM_URL} />
+            <TileLayerGuard attribution={OSM_ATTR} url={OSM_URL} />
             <Recenter lat={center[0]} lng={center[1]} zoom={zoom} />
             {junctionItems.map((j) =>
               j.latitude != null && j.longitude != null ? (
@@ -199,6 +264,14 @@ export function LiveMapPage() {
                 >
                   <Popup>
                     <b>{j.name}</b>
+                    {junctionStates[j.id] ? (
+                      <>
+                        <br />
+                        {junctionStates[j.id].online ? "Device online" : "Device offline"}
+                        <br />
+                        Signal state: {junctionStates[j.id].state ?? "Unknown"}
+                      </>
+                    ) : null}
                   </Popup>
                 </Marker>
               ) : null,
@@ -230,6 +303,7 @@ export function LiveMapPage() {
 }
 
 function SessionDetail({ session }: { session: LiveSession }) {
+  const thresholds = useFreshnessThresholds();
   const gps = session.latest_gps;
   return (
     <>
@@ -262,12 +336,30 @@ function SessionDetail({ session }: { session: LiveSession }) {
             }))}
           />
         )}
+        <Txt muted style={{ marginTop: 8 }}>
+          Acknowledged = the device received the command, not that the signal
+          changed.
+        </Txt>
       </Card>
 
       <Card>
-        <Txt as="div" style={{ fontWeight: 600, marginBottom: 8 }}>
-          Latest GPS
-        </Txt>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            marginBottom: 8,
+          }}
+        >
+          <Txt as="div" style={{ fontWeight: 600 }}>
+            Latest GPS
+          </Txt>
+          <GpsStaleBadge
+            recordedAt={gps?.recorded_at}
+            gpsStaleSeconds={thresholds.gpsStaleSeconds}
+          />
+        </div>
         {gps ? (
           <>
             <div className="admin-map-box" style={{ height: 170 }}>
@@ -282,7 +374,7 @@ function SessionDetail({ session }: { session: LiveSession }) {
                 keyboard={false}
                 style={{ height: "100%", width: "100%" }}
               >
-                <TileLayer attribution={OSM_ATTR} url={OSM_URL} />
+                <TileLayerGuard attribution={OSM_ATTR} url={OSM_URL} />
                 <Marker
                   position={[gps.latitude, gps.longitude]}
                   icon={sessionIcon}

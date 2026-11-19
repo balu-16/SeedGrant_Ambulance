@@ -30,6 +30,26 @@ class RefreshIn(BaseModel):
     refresh_token: str
 
 
+class PortalLoginIn(BaseModel):
+    """POST /portal-auth/login body (dashboard users only; drivers rejected)."""
+
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=72)
+
+
+class PortalOwnershipIn(BaseModel):
+    """PATCH /admin/emergencies/{sid}/hospital-ownership body."""
+
+    hospital_id: uuid.UUID
+    reason: str = Field(min_length=5, max_length=512)
+
+
+class CommandAckIn(BaseModel):
+    """POST /commands/{cid}/ack body — attempt omitted = legacy device path."""
+
+    attempt: int | None = Field(default=None, ge=1)
+
+
 class ChangePasswordIn(BaseModel):
     current_password: str = Field(min_length=1, max_length=72)
     new_password: str = Field(min_length=8, max_length=72)

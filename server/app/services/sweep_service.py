@@ -91,10 +91,14 @@ async def sweep_timeouts(db, force: bool = False) -> dict:
         await db.flush()
 
     if release_commands:
+        # Command + delivery rows must be committed BEFORE the MQTT publish
+        # (contract §6: publish after commit) — end the sweep transaction here.
+        await db.commit()
         from app.services.emergency_service import publish_release_commands
 
-        if not await publish_release_commands(release_commands):
+        if not await publish_release_commands(db, release_commands):
             counts["release_commands_pending"] = len(release_commands)
+        await db.commit()
 
     # Fire-and-forget timeout pushes (background task, never raises) — only
     # for sessions this sweep actually flipped, so no duplicate notifies.

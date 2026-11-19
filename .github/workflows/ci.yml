@@ -62,6 +62,63 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+      - run: npm test
+
+  # Optional browser tests (plan §6.4): run only when the demo backend needs no
+  # production credentials — the journeys use the seeded demo users (contract
+  # §8) against a local backend started in the job. Kept separate from the
+  # required admin checks so a missing demo seed never blocks CI.
+  admin-e2e:
+    name: Admin e2e (demo)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: demo_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d demo_db"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      ENVIRONMENT: dev
+      MQTT_PROVIDER: mock
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/demo_db
+      SYNC_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/demo_db
+      JWT_SECRET: ci-only-secret-that-is-long-enough-for-tests
+      RATE_LIMIT_ENABLED: "false"
+      DEMO_MODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+      - run: npm ci
+      - run: npx playwright install chromium --with-deps
+      - name: Seed and start the demo backend (localhost:8000)
+        working-directory: server
+        run: |
+          uv sync --locked
+          uv run alembic upgrade head
+          uv run python -m scripts.simulator --seed-only
+          uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+          for i in $(seq 1 30); do
+            curl -s -o /dev/null http://localhost:8000/ && break
+            sleep 2
+          done
+      - name: Run Playwright journeys
+        run: npm run test:e2e
 
   client:
     name: Client checks

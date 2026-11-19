@@ -20,6 +20,7 @@ _SWEEP_EVERY_SECONDS = 60.0
 # (method, path match, exact) — exact=True means full-path equality
 _LIMITED_ROUTES = (
     ("POST", "/api/v1/auth/", False),
+    ("POST", "/api/v1/portal-auth/", False),
 )
 
 

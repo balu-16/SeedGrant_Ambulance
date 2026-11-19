@@ -43,7 +43,7 @@ export function HospitalAlertsPage() {
         <Empty
           icon="notifications_active"
           title="No alerts"
-          body="Timeouts, device-offline events and emergency alerts for your fleet appear here."
+          body="Emergency starts and endings for your fleet, timed-out sessions and expired commands appear here."
         />
       ) : (
         rows.map((alert, i) => (

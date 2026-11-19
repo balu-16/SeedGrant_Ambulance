@@ -3,6 +3,10 @@
  * emergency sessions on the left, their latest GPS on the map on the right.
  * Selecting a session opens a Drawer with the command timeline and status.
  * Polls /admin/live every 10s (server scopes to own hospital).
+ *
+ * Freshness (contract §9): "Last updated Xs ago" + stale banner past
+ * portal_stale_seconds, "Stale GPS" badge past gps_stale_seconds, and a
+ * failed refetch keeps the last data with an error banner.
  */
 
 import { useState } from "react";
@@ -22,7 +26,14 @@ import {
 } from "@/components/ui";
 import { fetchLive } from "@/services/portal";
 import type { LiveSession } from "@/types/portal";
-import { Loading, InlineError } from "@/pages/shared/bits";
+import {
+  FreshnessCaption,
+  GpsStaleBadge,
+  InlineError,
+  Loading,
+  StaleBanner,
+} from "@/pages/shared/bits";
+import { isStale, useFreshnessThresholds } from "@/pages/shared/freshness";
 import { MapView, type MapDot } from "@/pages/shared/MapView";
 import {
   DEFAULT_CENTER,
@@ -40,6 +51,7 @@ export function HospitalLiveTrackingPage() {
   const { user } = useAuth();
   const { pathname } = useLocation();
   const item = currentNavItem(pathname, (user?.role ?? "hospital") as PortalRole);
+  const thresholds = useFreshnessThresholds();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const live = useQuery({
@@ -51,6 +63,9 @@ export function HospitalLiveTrackingPage() {
   const sessions = live.data?.items ?? [];
   const selected: LiveSession | null =
     sessions.find((s) => s.id === selectedId) ?? null;
+  const stale =
+    live.data !== undefined &&
+    isStale(live.dataUpdatedAt, thresholds.portalStaleSeconds);
 
   const dots: MapDot[] = sessions
     .filter((s) => s.latest_gps)
@@ -71,11 +86,33 @@ export function HospitalLiveTrackingPage() {
         subtitle={item?.subtitle ?? "Your active emergencies and live positions"}
       />
 
-      {live.error && <InlineError error={live.error} fallback="Could not load live sessions." />}
+      {live.error && (
+        <InlineError
+          error={live.error}
+          fallback="Could not refresh live sessions — showing the last loaded positions."
+        />
+      )}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          flexWrap: "wrap",
+        }}
+      >
+        {live.data && (
+          <Txt muted>
+            observed {fmtRelative(live.data.observed_at)}
+          </Txt>
+        )}
+        <FreshnessCaption updatedAt={live.dataUpdatedAt} />
+      </div>
+      <StaleBanner stale={stale} />
 
       {live.isLoading ? (
         <Loading label="Loading live sessions" />
-      ) : sessions.length === 0 ? (
+      ) : live.error && sessions.length === 0 ? null : sessions.length === 0 ? (
         <Empty
           icon="my_location"
           title="No active emergencies"
@@ -141,11 +178,24 @@ export function HospitalLiveTrackingPage() {
                       <Txt>elapsed {fmtElapsed(session.started_at)}</Txt>
                     </div>
                     {session.latest_gps && (
-                      <Txt muted style={{ fontSize: 12 }}>
-                        last GPS {fmtRelative(session.latest_gps.recorded_at)} ·{" "}
-                        {session.latest_gps.latitude.toFixed(5)},{" "}
-                        {session.latest_gps.longitude.toFixed(5)}
-                      </Txt>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 8,
+                        }}
+                      >
+                        <Txt muted style={{ fontSize: 12 }}>
+                          last GPS {fmtRelative(session.latest_gps.recorded_at)} ·{" "}
+                          {session.latest_gps.latitude.toFixed(5)},{" "}
+                          {session.latest_gps.longitude.toFixed(5)}
+                        </Txt>
+                        <GpsStaleBadge
+                          recordedAt={session.latest_gps.recorded_at}
+                          gpsStaleSeconds={thresholds.gpsStaleSeconds}
+                        />
+                      </div>
                     )}
                   </Card>
                 </div>
@@ -191,11 +241,17 @@ export function HospitalLiveTrackingPage() {
                   <Txt muted style={{ fontSize: 12, textTransform: "uppercase", fontWeight: 600 }}>
                     Last GPS
                   </Txt>
-                  <Txt>
-                    {selected.latest_gps.latitude.toFixed(5)},{" "}
-                    {selected.latest_gps.longitude.toFixed(5)} ·{" "}
-                    {fmtRelative(selected.latest_gps.recorded_at)}
-                  </Txt>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <Txt>
+                      {selected.latest_gps.latitude.toFixed(5)},{" "}
+                      {selected.latest_gps.longitude.toFixed(5)} ·{" "}
+                      {fmtRelative(selected.latest_gps.recorded_at)}
+                    </Txt>
+                    <GpsStaleBadge
+                      recordedAt={selected.latest_gps.recorded_at}
+                      gpsStaleSeconds={thresholds.gpsStaleSeconds}
+                    />
+                  </div>
                 </>
               )}
             </Card>
@@ -214,6 +270,10 @@ export function HospitalLiveTrackingPage() {
                 }))}
               />
             )}
+            <Txt muted>
+              Acknowledged = the junction device received the command, not that
+              the signal changed.
+            </Txt>
           </>
         )}
       </Drawer>

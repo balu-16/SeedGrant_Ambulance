@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { fileURLToPath, URL } from "node:url";
 
 import react from "@vitejs/plugin-react";
@@ -23,5 +24,14 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+  // Vitest unit tests (src/**/*.test.{ts,tsx}) — `test` config is read by the
+  // vitest CLI from this same file. Playwright e2e live in playwright.config.ts.
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: ["./src/test/setup.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
+    css: false,
   },
 });

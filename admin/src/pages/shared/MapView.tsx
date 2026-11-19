@@ -3,13 +3,18 @@
  * Live (plan §4.2/§4.3). OpenStreetMap tiles, colored L.divIcon dots and a
  * popup per dot. The container gets an explicit height (react-leaflet
  * requirement); the view recenters when the caller's center changes.
+ *
+ * Tile failures (plan §3.4 "keep maps usable when external tile loading
+ * fails"): TileLayerGuard listens for tileerror and renders a dismissible
+ * overlay message — markers, popups and the caller's list stay usable.
  */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import * as L from "leaflet";
 import { MapContainer, Marker, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { DEFAULT_CENTER, tileUrl } from "@/pages/shared/format";
+import { Icon } from "@/components/ui";
 
 export interface MapDot {
   id: string;
@@ -48,6 +53,38 @@ function dotIcon(color: string): L.DivIcon {
   return icon;
 }
 
+/**
+ * TileLayer + in-map fallback banner when tiles cannot load (offline dev,
+ * blocked CDN). Map interaction continues; the caller's list is unaffected.
+ */
+export function TileLayerGuard({
+  attribution,
+  url,
+}: {
+  attribution: string;
+  url: string;
+}) {
+  const [tilesFailed, setTilesFailed] = useState(false);
+  return (
+    <>
+      <TileLayer
+        attribution={attribution}
+        url={url}
+        eventHandlers={{ tileerror: () => setTilesFailed(true) }}
+      />
+      {tilesFailed && (
+        <div className="map-tile-fallback" role="status">
+          <Icon name="map" size={18} color="var(--heading)" />
+          <span>
+            Map tiles could not be loaded — markers stay visible and the
+            session list remains available.
+          </span>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function MapView({
   dots,
   center = DEFAULT_CENTER,
@@ -76,10 +113,7 @@ export function MapView({
       }}
       aria-label={ariaLabel}
     >
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors'
-        url={tileUrl()}
-      />
+      <TileLayerGuard attribution="&copy; <a href='https://www.openstreetmap.org/copyright' target='_blank' rel='noreferrer'>OpenStreetMap</a> contributors" url={tileUrl()} />
       <Recenter lat={center[0]} lng={center[1]} />
       {dots.map((dot) => (
         <Marker

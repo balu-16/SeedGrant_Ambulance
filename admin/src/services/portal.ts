@@ -1,9 +1,13 @@
 /**
- * Portal endpoint functions (typed contracts in types/portal.ts, endpoint
- * contract in ADMIN_PORTAL_PLAN.md §5). Every function routes through
- * services/api.ts request<T>() — no fetch calls anywhere else.
+ * Portal endpoint functions (typed contracts in types/portal.ts, interface
+ * contract in /tmp/seedgrant_baseline/contract.md). Every function routes
+ * through services/api.ts request<T>() — no fetch calls anywhere else except
+ * exportEmergenciesCsv, which streams a blob with the Authorization header.
  */
 
+import { API_BASE } from "@/services/apiBase";
+import { ApiError } from "@/services/ApiError";
+import { getAccessToken } from "@/services/portalAuth";
 import { request } from "@/services/api";
 import type {
   Ambulance,
@@ -15,23 +19,31 @@ import type {
   Hospital,
   JunctionDetail,
   JunctionSummary,
-  LiveSession,
+  LiveData,
   OverrideResult,
-  PortalAlert,
-  PortalUser,
   Paged,
+  PortalAlert,
+  PortalStatus,
+  PortalUser,
   TelemetryRow,
+  TimelineResponse,
 } from "@/types/portal";
 
 // ---- users (ADMIN) ----------------------------------------------------------
 
-export function listUsers(params: {
-  limit?: number;
-  offset?: number;
-  role?: string;
-} = {}): Promise<Paged<PortalUser>> {
+export function listUsers(
+  params: {
+    q?: string;
+    role?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<Paged<PortalUser>> {
   const q = new URLSearchParams(
-    Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]),
+    Object.entries(params)
+      .filter(([, v]) => v !== undefined && v !== "")
+      .map(([k, v]) => [k, String(v)]),
   );
   return request<Paged<PortalUser>>(`/admin/users?${q}`);
 }
@@ -124,18 +136,25 @@ export function listFleetDrivers(): Promise<
   return request("/admin/fleet/drivers");
 }
 
+// ---- portal status (contract §1) ---------------------------------------------
+
+/** GET /portal/status — polled once per session (staleTime 60s). */
+export function fetchPortalStatus(): Promise<PortalStatus> {
+  return request<PortalStatus>("/portal/status");
+}
+
 // ---- live operations / alerts / analytics / audit ---------------------------
 
-export function fetchLive(): Promise<{ items: LiveSession[] }> {
-  return request("/admin/live");
+export function fetchLive(): Promise<LiveData> {
+  return request<LiveData>("/admin/live");
 }
 
 export function fetchAlerts(limit = 50): Promise<PortalAlert[]> {
-  return request(`/admin/alerts?limit=${limit}`);
+  return request<PortalAlert[]>(`/admin/alerts?limit=${limit}`);
 }
 
 export function fetchAnalytics(days = 7): Promise<AnalyticsOverview> {
-  return request(`/admin/analytics/overview?days=${days}`);
+  return request<AnalyticsOverview>(`/admin/analytics/overview?days=${days}`);
 }
 
 export function fetchAudit(params: { limit?: number; offset?: number; action?: string } = {}): Promise<
@@ -147,19 +166,92 @@ export function fetchAudit(params: { limit?: number; offset?: number; action?: s
   return request<Paged<AuditEntry>>(`/admin/audit?${q}`);
 }
 
-export function fetchEmergencies(params: {
-  limit?: number;
-  offset?: number;
+// ---- emergencies (contract §3): filters, export, timeline --------------------
+
+/** Server-side emergency filters (contract §3) shared by list + export. */
+export interface EmergencyFilters {
   status?: string;
-  junction_id?: string;
-  ambulance_id?: string;
+  /** ISO datetime (or date) on started_at — inclusive. */
   from?: string;
   to?: string;
-} = {}): Promise<Paged<EmergencyRow>> {
-  const q = new URLSearchParams(
-    Object.entries(params).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]),
-  );
+  ambulance_id?: string;
+  /** Session has ≥1 command at that junction. */
+  junction_id?: string;
+  /** ADMIN only — hospital scope always wins for HOSPITAL callers. */
+  hospital_id?: string;
+}
+
+/** Build the query string for the emergencies list/export endpoints. */
+export function emergencyFilterParams(
+  filters: EmergencyFilters = {},
+): URLSearchParams {
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== "") q.set(key, value);
+  }
+  return q;
+}
+
+export function fetchEmergencies(
+  params: EmergencyFilters & { limit?: number; offset?: number } = {},
+): Promise<Paged<EmergencyRow>> {
+  const q = emergencyFilterParams(params);
   return request<Paged<EmergencyRow>>(`/admin/emergencies?${q}`);
+}
+
+/**
+ * Server-side CSV export (contract §3): fetch with the Authorization header →
+ * blob → download. Never a bare <a href> to the API — the export must carry
+ * credentials and surface failures as catchable errors.
+ */
+export async function exportEmergenciesCsv(
+  filters: EmergencyFilters = {},
+): Promise<void> {
+  const token = getAccessToken();
+  let res: Response;
+  try {
+    res = await fetch(
+      `${API_BASE}/admin/emergencies/export.csv?${emergencyFilterParams(filters)}`,
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "same-origin",
+      },
+    );
+  } catch (e) {
+    throw new ApiError(
+      e instanceof Error ? `Network error: ${e.message}` : "Network error",
+      0,
+      "NETWORK_ERROR",
+    );
+  }
+  if (!res.ok) {
+    let message = `Export failed (${res.status})`;
+    try {
+      const payload = (await res.json()) as { error?: { message?: string } };
+      if (payload.error?.message) message = payload.error.message;
+    } catch {
+      // Not an envelope — keep the generic message.
+    }
+    throw new ApiError(message, res.status, res.status === 401 ? "UNAUTHORIZED" : "EXPORT_FAILED");
+  }
+  const blob = await res.blob();
+  // Prefer the server's Content-Disposition filename.
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = /filename="([^"]+)"/.exec(disposition);
+  const filename = match?.[1] ?? "emergencies-export.csv";
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** GET /emergencies/{sid}/timeline (contract §4 — admin + owning hospital). */
+export function fetchEmergencyTimeline(sid: string): Promise<TimelineResponse> {
+  return request<TimelineResponse>(`/emergencies/${sid}/timeline`);
 }
 
 // ---- junctions / commands / overrides / devices -----------------------------

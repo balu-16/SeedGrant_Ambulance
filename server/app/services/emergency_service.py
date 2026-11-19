@@ -77,6 +77,23 @@ def ensure_owner(session: EmergencySession, user) -> None:
 
 
 async def start_session(db, ambulance, user, hospital: str | None = None) -> EmergencySession:
+    # Lock the ambulance row first: the hospital-transfer guard in the
+    # ambulance PATCH handler takes the same lock, so a concurrent
+    # start-emergency + hospital-reassignment cannot create inconsistent
+    # ownership (the loser blocks until the winner commits).
+    from app.models.user import Ambulance as _Ambulance
+
+    locked = (
+        (
+            await db.execute(
+                select(_Ambulance).where(_Ambulance.id == ambulance.id).with_for_update()
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if locked is not None:
+        ambulance = locked
     existing = await active_session_for_ambulance(db, ambulance.id)
     if existing:
         apply_timeouts(existing)
@@ -106,6 +123,10 @@ async def start_session(db, ambulance, user, hospital: str | None = None) -> Eme
         driver_id=driver_lookup,
         status="ACTIVE",
         hospital=hospital or None,
+        # Ownership snapshot (plan §4.2): the ambulance's hospital AT SESSION
+        # START. Later transfers never move old records; pre-migration rows and
+        # hospital-less ambulances stay NULL (admin-only visibility).
+        owner_hospital_id=ambulance.hospital_id,
     )
     db.add(s)
     try:
@@ -188,21 +209,28 @@ async def release_session_commands(db, session_id: uuid.UUID):
     return releases
 
 
-async def publish_release_commands(commands) -> bool:
-    """Publish releases with a small in-request retry suitable for the prototype."""
+async def publish_release_commands(db, commands) -> bool:
+    """Publish releases with a small in-request retry suitable for the prototype.
+
+    Delivery rows are (idempotently) ensured before each publish — normally
+    they were already inserted in the same transaction that created/re-armed
+    the release command. published_at is stamped on success on the delivery
+    row; the COMMAND itself stays PENDING until a device acknowledges it (a
+    broker-accepted publish is not device receipt — plan §4.4/§6.3), so the
+    HTTP poll path can still deliver it to a device whose MQTT link is down.
+    """
+    from app.services.command_service import mark_delivery_published, record_delivery
     from app.services.gps_service import publish_command
 
     all_sent = True
     for command in commands:
+        await record_delivery(db, command, via="mqtt")
         sent = False
         for _ in range(3):
             if await publish_command(command, str(command.junction_id), command.approach):
                 sent = True
                 break
         if sent:
-            # Persist delivery state so a later /emergencies/current can
-            # distinguish a release that was published from one that still
-            # needs a retry.  The command remains correlated/idempotent.
-            command.status = "SENT"
+            await mark_delivery_published(db, command)
         all_sent = all_sent and sent
     return all_sent

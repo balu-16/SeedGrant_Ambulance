@@ -40,6 +40,28 @@ async def get_current_user(
     user = await get_user_by_id(db, uid)
     if not user or not user.is_active:
         raise Unauthorized("User not found or inactive")
+    # Portal tokens carry `sid` (PortalSession id): revoked/expired sessions
+    # invalidate the token immediately, even inside the short access window.
+    # Driver tokens (no sid) bypass this — the driver /auth/* contract is
+    # unchanged.
+    sid = payload.get("sid")
+    if sid:
+        from datetime import UTC
+        from datetime import datetime as _dt
+
+        from app.models.portal import PortalSession
+
+        try:
+            sid_uuid = uuid.UUID(str(sid))
+        except ValueError:
+            raise Unauthorized("Invalid portal session reference") from None
+        ps = (
+            await db.execute(select(PortalSession).where(PortalSession.id == sid_uuid))
+        ).scalar_one_or_none()
+        if ps is None or ps.revoked_at is not None:
+            raise Unauthorized("Portal session revoked — please log in again")
+        if ps.expires_at is not None and ps.expires_at <= _dt.now(UTC):
+            raise Unauthorized("Portal session expired — please log in again")
     return user
 
 

@@ -2,14 +2,18 @@
  * ADMIN Junctions (plan §4.1) — junction registry table; the detail drawer
  * shows the junction's approaches (direction + heading windows) and a manual
  * override console (FORCE_RELEASE / HOLD / REISSUE, reason required ≥5 chars)
- * via overrideJunction, with results appended to an in-drawer Timeline.
+ * via overrideJunction. Results render the truthful contract §6 shape:
+ * command/release identity + delivery status ("Pending until device
+ * acknowledges"); 409 conflicts surface their codes inline. Junction delete
+ * uses the shared ConfirmDialog (no window.confirm).
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { createJunction, deleteJunction, getJunction, listJunctions, overrideJunction, patchJunction } from "@/services/portal";
 import type { JunctionSummary, OverrideResult } from "@/types/portal";
-import { Badge, Card, Drawer, Empty, Field, PageHeader, Table, Txt, type TableColumn } from "@/components/ui";
+import { ApiError } from "@/services/api";
+import { Badge, Card, ConfirmDialog, Drawer, Empty, Field, PageHeader, Table, Txt, type TableColumn } from "@/components/ui";
 import { errMsg, shortId, timelineTone } from "@/pages/admin/shared";
 import {
   ErrorCard,
@@ -169,7 +173,16 @@ function CreateJunctionForm({ onDone }: { onDone: () => void }) {
   );
 }
 
+/** Error line with the API code visible for conflicts (409 RELEASE_OUTSTANDING…). */
+function overrideErrorText(e: unknown): string {
+  if (e instanceof ApiError && e.code !== "REQUEST_FAILED" && e.code !== "UNKNOWN") {
+    return `${e.code} — ${e.message}`;
+  }
+  return errMsg(e);
+}
+
 function JunctionConsole({ junction }: { junction: JunctionSummary }) {
+  const qc = useQueryClient();
   const detail = useQuery({
     queryKey: ["admin", "junction", junction.id],
     queryFn: () => getJunction(junction.id),
@@ -183,8 +196,11 @@ function JunctionConsole({ junction }: { junction: JunctionSummary }) {
   const m = useMutation({
     mutationFn: (action: OverrideAction) =>
       overrideJunction(junction.id, action, reason.trim()),
-    onSuccess: (res) => setLog((prev) => [res, ...prev]),
-    onError: (e) => setErr(errMsg(e)),
+    onSuccess: (res) => {
+      setLog((prev) => [res, ...prev]);
+      void qc.invalidateQueries({ queryKey: ["admin", "live"] });
+    },
+    onError: (e) => setErr(overrideErrorText(e)),
   });
 
   function send(action: OverrideAction) {
@@ -234,7 +250,8 @@ function JunctionConsole({ junction }: { junction: JunctionSummary }) {
         </Txt>
         <Txt muted style={{ marginBottom: 10 }}>
           Sends a command to this junction's device. Every override is
-          audit-logged with your account.
+          audit-logged with your account. Acknowledgement means the device
+          received the command — not that the signal changed.
         </Txt>
         <Field
           label="Reason (min 5 characters)"
@@ -283,27 +300,67 @@ function JunctionConsole({ junction }: { junction: JunctionSummary }) {
             Override results
           </Txt>
           <div className="timeline">
-            {log.map((r, i) => (
-              <div className="timeline-row" key={`${r.command.id}-${i}`}>
-                <div className="timeline-rail">
-                  <span
-                    className={`timeline-dot timeline-dot--${timelineTone(r.command.status)}`}
-                  />
-                  {i < log.length - 1 && <span className="timeline-line" />}
+            {log.map((r, i) => {
+              const status =
+                r.delivery?.status ??
+                r.command?.status ??
+                (r.release ? "PENDING" : "");
+              return (
+                <div
+                  className="timeline-row"
+                  key={`${r.action}-${r.command?.id ?? i}-${i}`}
+                >
+                  <div className="timeline-rail">
+                    <span
+                      className={`timeline-dot timeline-dot--${
+                        status ? timelineTone(status) : "neutral"
+                      }`}
+                    />
+                    {i < log.length - 1 && <span className="timeline-line" />}
+                  </div>
+                  <div>
+                    <Txt>
+                      {r.action}
+                      {r.command ? ` — ${r.command.type}` : ""}
+                      {r.command?.approach ? ` (${r.command.approach})` : ""}
+                    </Txt>
+                    <Txt muted className="timeline-meta">
+                      {r.message}
+                    </Txt>
+                    {r.command && (
+                      <Txt muted className="timeline-meta admin-mono">
+                        attempt {r.command.attempt} · {r.command.status} ·
+                        correlation {shortId(r.command.correlation_id)}
+                      </Txt>
+                    )}
+                    {r.delivery && (
+                      <div style={{ marginTop: 4 }}>
+                        <Badge
+                          label={
+                            r.delivery.status === "PENDING"
+                              ? "Delivery pending — until device acknowledges"
+                              : `Delivery ${r.delivery.status.toLowerCase()}`
+                          }
+                          tone={
+                            r.delivery.status === "ACKNOWLEDGED"
+                              ? "green"
+                              : r.delivery.status === "PUBLISH_FAILED"
+                                ? "red"
+                                : "blue"
+                          }
+                        />
+                      </div>
+                    )}
+                    {r.release && (
+                      <Txt muted className="timeline-meta">
+                        Release published (attempt {r.release.attempt}) —
+                        pending until the device acknowledges.
+                      </Txt>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <Txt>
-                    {r.action} — {r.command.type} (
-                    {r.command.approach || "all approaches"})
-                  </Txt>
-                  <Txt muted className="timeline-meta">
-                    {r.command.status} · correlation{" "}
-                    {shortId(r.command.correlation_id)} · retries{" "}
-                    {r.command.retry_count}
-                  </Txt>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
       )}
@@ -319,6 +376,7 @@ function JunctionEditForm({ junction }: { junction: JunctionSummary }) {
   const [radius, setRadius] = useState(String(initialRadius));
   const [active, setActive] = useState(initialActive);
   const [msg, setMsg] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const patch = useMutation({
     mutationFn: () => {
       const body: Record<string, unknown> = {};
@@ -357,12 +415,20 @@ function JunctionEditForm({ junction }: { junction: JunctionSummary }) {
           tone="danger"
           title="Delete"
           loading={del.isPending}
-          onClick={() => {
-            if (confirm(`Delete junction ${junction.name}? Only junctions without history can be deleted.`)) del.mutate();
-          }}
+          onClick={() => setConfirmDelete(true)}
         />
       </div>
       <Txt muted>Deactivation releases open priorities and blocks new ones; delete works only for unused junctions.</Txt>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title={`Delete junction ${junction.name}?`}
+        body={`This permanently removes "${junction.name}" and its approaches. Only junctions without history can be deleted — the server rejects anything with recorded emergencies or commands.`}
+        confirmLabel="Delete junction"
+        loading={del.isPending}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => del.mutate()}
+      />
     </Card>
   );
 }

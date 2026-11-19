@@ -16,6 +16,7 @@ from app.api.v1 import (
     emergencies,
     hospitals,
     junctions,
+    portal_auth,
     push,
     vision,
 )
@@ -201,7 +202,13 @@ def create_app() -> FastAPI:
         allow_origins=_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Device-Api-Key", "X-Request-Id"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Device-Api-Key",
+            "X-Request-Id",
+            "X-CSRF-Token",
+        ],
     )
     # Reject Host-header attacks; allow localhost + Render/vercel frontends.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
@@ -252,6 +259,7 @@ def create_app() -> FastAPI:
 
     for r in (
         auth.router,
+        portal_auth.router,
         push.router,
         ambulances.router,
         junctions.router,

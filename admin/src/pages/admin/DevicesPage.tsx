@@ -4,11 +4,11 @@
  * junction's telemetry (latest first, monospace JSON).
  */
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { listDevices, listJunctions, listTelemetry, registerDevice, rotateDeviceKey } from "@/services/portal";
 import type { DeviceStatus } from "@/types/portal";
-import { Badge, Card, Drawer, Empty, PageHeader, Table, Txt, type TableColumn } from "@/components/ui";
+import { Badge, Card, ConfirmDialog, Drawer, Empty, PageHeader, Table, Txt, type TableColumn } from "@/components/ui";
 import { fmtAgo, fmtDateTime, shortId } from "@/pages/admin/shared";
 import {
   ErrorCard,
@@ -38,6 +38,19 @@ export function DevicesPage() {
   const [regName, setRegName] = useState("");
   const [regResult, setRegResult] = useState<string | null>(null);
   const [regError, setRegError] = useState<string | null>(null);
+  const [rotateTarget, setRotateTarget] = useState<DeviceStatus | null>(null);
+  const rotateM = useMutation({
+    mutationFn: (deviceId: string) => rotateDeviceKey(deviceId),
+    onSuccess: (r) => {
+      setRegError(null);
+      setRegResult(`API key (shown once): ${r.api_key}`);
+      setRotateTarget(null);
+    },
+    onError: (e: unknown) => {
+      setRegResult(null);
+      setRegError(e instanceof Error ? e.message : "Rotate failed");
+    },
+  });
 
   const columns: TableColumn<DeviceStatus>[] = [
     {
@@ -138,12 +151,7 @@ export function DevicesPage() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (!confirm(`Rotate API key for device ${d.id.slice(0, 8)}? Old key stops working.`)) return;
-                      setRegError(null);
-                      setRegResult(null);
-                      void rotateDeviceKey(d.id)
-                        .then((r) => setRegResult(`API key (shown once): ${r.api_key}`))
-                        .catch((err: unknown) => setRegError(err instanceof Error ? err.message : "Rotate failed"));
+                      setRotateTarget(d);
                     }}
                   >
                     Rotate key
@@ -180,6 +188,20 @@ export function DevicesPage() {
           />
         )}
       </Drawer>
+
+      <ConfirmDialog
+        open={rotateTarget !== null}
+        title="Rotate API key?"
+        body={
+          rotateTarget
+            ? `A new API key will be generated for device ${shortId(rotateTarget.id)}. The old key stops working immediately and the device must be reconfigured — it will show as offline until then.`
+            : ""
+        }
+        confirmLabel="Rotate key"
+        loading={rotateM.isPending}
+        onCancel={() => setRotateTarget(null)}
+        onConfirm={() => rotateTarget && rotateM.mutate(rotateTarget.id)}
+      />
     </div>
   );
 }

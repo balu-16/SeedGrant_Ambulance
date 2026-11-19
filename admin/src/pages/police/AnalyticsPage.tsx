@@ -110,7 +110,7 @@ export function PoliceAnalyticsPage() {
     <div className="page-body">
       <PageHeader
         title="Analytics"
-        subtitle={item?.subtitle ?? "Crossing times, command outcomes and peak hours"}
+        subtitle={item?.subtitle ?? "Command outcomes, request→ack and peak hours"}
       />
 
       <div style={{ maxWidth: 320 }}>
@@ -154,12 +154,57 @@ export function PoliceAnalyticsPage() {
               icon="terminal"
             />
             <StatCard
+              label="Pending Now"
+              value={String(overview.commands.current_pending ?? 0)}
+              tone="purple"
+              icon="pending_actions"
+            />
+            <StatCard
               label="Devices Online"
               value={`${overview.devices.online} / ${overview.devices.total}`}
               tone="green"
               icon="memory"
             />
           </div>
+
+          <SectionTitle>Request→Ack (device)</SectionTitle>
+          {overview.request_to_ack ? (
+            <Card style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+                <Txt>
+                  <span className="stat-label">Median</span>
+                  <span className="stat-value" style={{ fontSize: 22 }}>
+                    {overview.request_to_ack.p50_minutes != null
+                      ? `${overview.request_to_ack.p50_minutes} ${overview.request_to_ack.unit === "minutes" ? "min" : overview.request_to_ack.unit}`
+                      : "—"}
+                  </span>
+                </Txt>
+                <Txt>
+                  <span className="stat-label">95th pct</span>
+                  <span className="stat-value" style={{ fontSize: 22 }}>
+                    {overview.request_to_ack.p95_minutes != null
+                      ? `${overview.request_to_ack.p95_minutes} ${overview.request_to_ack.unit === "minutes" ? "min" : overview.request_to_ack.unit}`
+                      : "—"}
+                  </span>
+                </Txt>
+                <Txt>
+                  <span className="stat-label">Samples</span>
+                  <span className="stat-value" style={{ fontSize: 22 }}>
+                    {overview.request_to_ack.samples}
+                  </span>
+                </Txt>
+              </div>
+              <Txt muted>
+                {overview.request_to_ack.timezone} · device receipt, not a
+                physical crossing time.
+              </Txt>
+            </Card>
+          ) : (
+            <Txt muted>
+              No request→acknowledgement data in this period (device receipt
+              metric).
+            </Txt>
+          )}
 
           <SectionTitle>Commands by Status</SectionTitle>
           {commandBars.length === 0 ? (

@@ -292,10 +292,19 @@ async def test_admin_alerts_scoped(client, admin, db_factory):
     assert len(offline) == 1
     assert offline[0]["refs"]["junction_id"] == j1["id"]
     assert set(alerts_a[0]) == {"type", "severity", "message", "at", "refs"}
+    # derived lifecycle events (contract §5): officer A sees the started alert
+    # for junction A's session too
+    started_a = [a for a in alerts_a if a["type"] == "emergency_started"]
+    assert len(started_a) == 1 and started_a[0]["refs"]["session_id"] == str(c1.session_id)
+    assert started_a[0]["severity"] == "info"
 
-    # officer B (junction B, no device, PENDING command) sees neither alert
+    # officer B (junction B, no device, PENDING command) sees neither offline
+    # nor expired alerts — only the derived started event for its own session
     rb = await client.get("/api/v1/admin/alerts", headers=officer_b["headers"])
-    assert rb.json()["data"] == []
+    alerts_b = rb.json()["data"]
+    assert [a["type"] for a in alerts_b if a["type"] != "emergency_started"] == []
+    started_b = [a for a in alerts_b if a["type"] == "emergency_started"]
+    assert len(started_b) == 1 and started_b[0]["refs"]["session_id"] == str(c2.session_id)
 
     # ADMIN sees the device + expired-command alerts
     rm = await client.get("/api/v1/admin/alerts", headers=admin["headers"])

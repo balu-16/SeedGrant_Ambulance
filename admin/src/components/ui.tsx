@@ -13,6 +13,7 @@
 import {
   useEffect,
   useId,
+  useRef,
   useState,
   type CSSProperties,
   type InputHTMLAttributes,
@@ -168,7 +169,7 @@ export interface FieldProps
   icon?: IconName;
   error?: string;
   password?: boolean;
-  type?: "text" | "email" | "password" | "number" | "tel" | "search" | "url";
+  type?: "text" | "email" | "password" | "number" | "tel" | "search" | "url" | "date";
 }
 
 export function Field({
@@ -340,6 +341,16 @@ export function Timeline({ items }: { items: TimelineItem[] }) {
 
 // ---- Drawer (right slide-over — web counterpart of the app's Sheet) ----
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusablesIn(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return [];
+  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (el) => el.offsetParent !== null || el === document.activeElement,
+  );
+}
+
 export function Drawer({
   open,
   title,
@@ -353,11 +364,52 @@ export function Drawer({
   children?: ReactNode;
   width?: number;
 }) {
-  // Close on Escape, like the app's onRequestClose.
+  const panelRef = useRef<HTMLElement | null>(null);
+  const restoreRef = useRef<HTMLElement | null>(null);
+
+  // Focus management: on open, move focus into the dialog and trap Tab; on
+  // close, restore focus to the element that opened it.
+  useEffect(() => {
+    if (!open) return;
+    restoreRef.current = document.activeElement as HTMLElement | null;
+    const raf = requestAnimationFrame(() => {
+      const focusables = focusablesIn(panelRef.current);
+      (focusables[0] ?? panelRef.current)?.focus();
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      restoreRef.current?.focus?.();
+      restoreRef.current = null;
+    };
+  }, [open]);
+
+  // Close on Escape + Tab trap, like the app's onRequestClose.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key === "Tab" && panelRef.current) {
+        const focusables = focusablesIn(panelRef.current);
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const active = document.activeElement;
+        const inside =
+          active instanceof Node && panelRef.current.contains(active);
+        if (!inside) {
+          e.preventDefault();
+          first.focus();
+        } else if (e.shiftKey && active === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -366,7 +418,15 @@ export function Drawer({
   return (
     <div className={`drawer-root${open ? " drawer-root--open" : ""}`} aria-hidden={!open}>
       <div className="drawer-backdrop" onClick={onClose} aria-label="Close dialog" />
-      <aside className="drawer" style={{ width }} role="dialog" aria-label={title}>
+      <aside
+        ref={panelRef}
+        className="drawer"
+        style={{ width }}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+      >
         <div className="drawer-head">
           <span className="drawer-title">{title}</span>
           <button type="button" className="drawer-close" onClick={onClose} aria-label="Close dialog">
@@ -376,6 +436,45 @@ export function Drawer({
         <div className="drawer-body">{children}</div>
       </aside>
     </div>
+  );
+}
+
+// ---- ConfirmDialog (replaces window.confirm — accessible, focus-managed) ----
+
+export function ConfirmDialog({
+  open,
+  title,
+  body,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  tone = "danger",
+  loading = false,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  body: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  tone?: "primary" | "quiet" | "danger";
+  loading?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Drawer open={open} title={title} onClose={onCancel} width={420}>
+      <Txt>{body}</Txt>
+      <Row style={{ justifyContent: "flex-end", flexWrap: "wrap" }}>
+        <Button title={cancelLabel} tone="quiet" onClick={onCancel} disabled={loading} />
+        <Button
+          title={confirmLabel}
+          tone={tone}
+          loading={loading}
+          onClick={onConfirm}
+        />
+      </Row>
+    </Drawer>
   );
 }
 

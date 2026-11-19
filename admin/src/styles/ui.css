@@ -531,6 +531,50 @@
   gap: 16px;
 }
 
+/* Narrow screens: dialogs span the viewport (min-width guard so the confirm
+   dialog never squeezes below a usable size). */
+@media (max-width: 480px) {
+  .drawer {
+    width: 100vw !important;
+    border-radius: 0;
+    min-width: 100vw;
+  }
+}
+
+/* ---- Stale-data banner (contract §9: failed refresh ≠ empty/zero state) */
+.stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--heading);
+  font-size: 13px;
+  line-height: 18px;
+  background: var(--blue-light);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-field);
+  padding: 10px 12px;
+}
+
+/* ---- Map tile failure fallback (plan §3.4: keep maps usable) */
+.map-tile-fallback {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--heading);
+  font-size: 12px;
+  line-height: 17px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-field);
+  padding: 9px 11px;
+  box-shadow: var(--shadow-card);
+}
+
 /* ---- SectionTitle / Row helpers ---- */
 .section-title {
   display: flex;

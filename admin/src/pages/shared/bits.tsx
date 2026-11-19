@@ -1,12 +1,15 @@
 /**
  * Small shared pieces for the HOSPITAL / POLICE pages that the ui kit does
- * not cover: inline loading card, inline error banner (never alert()) and a
- * label-over-select field styled like the kit's Field.
+ * not cover: inline loading card, inline error banner (never alert()), a
+ * label-over-select field styled like the kit's Field, and the freshness
+ * pieces (Last-updated caption, stale banner, Stale GPS badge) shared by all
+ * three live views. Freshness logic lives in shared/freshness.ts.
  */
 
 import { useId } from "react";
 import { ApiError } from "@/services/api";
-import { Card, Icon, Txt } from "@/components/ui";
+import { Badge, Card, Icon, Txt } from "@/components/ui";
+import { isGpsStale, useFreshness } from "@/pages/shared/freshness";
 
 export function Loading({ label = "Loading" }: { label?: string }) {
   return (
@@ -81,4 +84,51 @@ export function SelectField({
       </div>
     </div>
   );
+}
+
+// ---- Freshness (contract §9: show data age; stale after portal_stale_seconds) ----
+
+/** "Last updated Xs ago" caption (null age → "Last updated —"). */
+export function FreshnessCaption({
+  updatedAt,
+}: {
+  updatedAt: number | undefined;
+}) {
+  const { secondsAgo } = useFreshness(updatedAt);
+  return (
+    <Txt muted style={{ fontSize: 12 }}>
+      Last updated{" "}
+      {secondsAgo === null
+        ? "—"
+        : secondsAgo < 5
+          ? "just now"
+          : `${secondsAgo}s ago`}
+    </Txt>
+  );
+}
+
+/** Banner shown when the last successful refresh exceeds the portal threshold. */
+export function StaleBanner({ stale }: { stale: boolean }) {
+  if (!stale) return null;
+  return (
+    <div className="stale-banner" role="status">
+      <Icon name="hourglass_empty" size={18} color="var(--muted)" />
+      <span>
+        Data may be out of date — the last refresh did not complete. Retrying
+        every 10 seconds.
+      </span>
+    </div>
+  );
+}
+
+/** "Stale GPS" pill when the latest fix is older than the GPS threshold. */
+export function GpsStaleBadge({
+  recordedAt,
+  gpsStaleSeconds,
+}: {
+  recordedAt: string | null | undefined;
+  gpsStaleSeconds: number;
+}) {
+  if (!isGpsStale(recordedAt, gpsStaleSeconds)) return null;
+  return <Badge label="Stale GPS" tone="neutral" />;
 }

@@ -63,15 +63,23 @@ async def test_force_release_issues_release_command_and_publishes(
     assert r.status_code == 200, r.text
     data = r.json()["data"]
     assert data["action"] == "FORCE_RELEASE"
-    assert data["command"]["type"] == "RELEASE_PRIORITY"
-    assert data["command"]["status"] == "SENT"
+    # contract §6 shape: command = the open priority, release = the new release
+    assert data["command"]["id"] == str(cmd.id)
+    assert data["command"]["type"] == "PRIORITY_REQUEST"
+    assert data["release"]["type"] == "RELEASE_PRIORITY"
+    # broker-accepted publish is NOT device receipt: the release stays PENDING
+    # (pollable by a device whose MQTT link is down) until it is acknowledged
+    assert data["release"]["status"] == "PENDING"
+    assert data["delivery"]["status"] == "PENDING"
+    assert data["delivery"]["via"] == "mqtt"
+    assert data["release"]["attempt"] == 1
 
     rows = await _commands_for(db_factory, junction["id"])
     by_id = {c.id: c for c in rows}
     assert by_id[cmd.id].status == "RELEASED"  # the open priority was released
     releases = [c for c in rows if c.command_type == "RELEASE_PRIORITY"]
-    assert len(releases) == 1 and releases[0].status == "SENT"
-    assert releases[0].correlation_id == data["command"]["correlation_id"]
+    assert len(releases) == 1 and releases[0].status == "PENDING"
+    assert releases[0].correlation_id == data["release"]["correlation_id"]
 
     published = [
         m
@@ -80,7 +88,10 @@ async def test_force_release_issues_release_command_and_publishes(
         and m.payload["type"] == "RELEASE_PRIORITY"
     ]
     assert len(published) == 1
-    assert published[0].payload["correlation_id"] == data["command"]["correlation_id"]
+    assert published[0].payload["correlation_id"] == data["release"]["correlation_id"]
+    # envelope parity: the MQTT payload carries id/attempt/junction_seq
+    assert published[0].payload["id"] == data["release"]["id"]
+    assert published[0].payload["attempt"] == 1
 
 
 async def test_hold_shelves_open_command_without_publish(client, admin, db_factory, junction):
@@ -227,9 +238,11 @@ async def test_rearm_capped_at_max_retries(client, admin, db_factory, junction, 
     )
 
 
-async def test_reissue_rearms_expired_command(client, admin, db_factory, junction):
+async def test_reissue_rearms_expired_command(client, admin, db_factory, junction, device):
+    """REISSUE: active session + registered device + no outstanding release."""
     cmd = await insert_priority_command(db_factory, uuid.UUID(junction["id"]))
     old_expires = cmd.expires_at
+    old_correlation = cmd.correlation_id
     async with db_factory() as s:
         row = await s.get(EmergencyCommand, cmd.id)
         row.status = "EXPIRED"
@@ -241,10 +254,17 @@ async def test_reissue_rearms_expired_command(client, admin, db_factory, junctio
     )
     r = await _override(client, officer["headers"], junction["id"], "REISSUE")
     assert r.status_code == 200, r.text
-    data = r.json()["data"]["command"]
-    assert data["status"] == "PENDING"
-    assert data["retry_count"] == 1
-    assert data["correlation_id"] == cmd.correlation_id  # same command re-armed
+    data = r.json()["data"]
+    assert data["action"] == "REISSUE"
+    assert data["command"]["status"] == "PENDING"
+    assert data["command"]["attempt"] == 2  # retry_count 0 → 1
+    assert data["command"]["id"] == str(cmd.id)  # same command re-armed
+    assert data["command"]["correlation_id"] != old_correlation
+    # retry correlation: truncated base + :a2 suffix, still <= 64 chars
+    assert data["command"]["correlation_id"].endswith(":a2")
+    assert len(data["command"]["correlation_id"]) <= 64
+    assert data["delivery"]["status"] == "PENDING"
+    assert data["release"] is None
 
     async with db_factory() as s:
         row = await s.get(EmergencyCommand, cmd.id)
@@ -259,7 +279,9 @@ async def test_reissue_rearms_expired_command(client, admin, db_factory, junctio
         and m.payload["type"] == "PRIORITY_REQUEST"
     ]
     assert len(published) == 1
-    assert published[0].payload["correlation_id"] == cmd.correlation_id
+    assert published[0].payload["correlation_id"] == data["command"]["correlation_id"]
+    assert published[0].payload["attempt"] == 2
+    assert published[0].payload["id"] == str(cmd.id)
 
 
 async def test_override_without_open_command_is_409(client, admin, db_factory, junction):

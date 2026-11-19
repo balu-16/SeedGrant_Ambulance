@@ -197,7 +197,9 @@ async def test_patch_junction_and_deactivate_releases_commands(
             if c.command_type == "PRIORITY_REQUEST"
         )
         assert any(
-            c.command_type == "RELEASE_PRIORITY" and c.status == "SENT"
+            # broker-accepted publish is not device receipt: the release stays
+            # PENDING (pollable) until the device acknowledges it
+            c.command_type == "RELEASE_PRIORITY" and c.status == "PENDING"
             for c in cmds
         )
         session = (

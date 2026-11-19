@@ -75,10 +75,12 @@ export function durationMinutes(
 }
 
 /** Alert severity → Badge tone (plan §4.2 Alerts feed). The backend emits
- * "warning" | "critical" — anything else falls through to neutral. */
+ * "info" (emergency started/ended), "warning" | "critical" — anything else
+ * falls through to neutral. */
 export function severityTone(severity: string): BadgeTone {
   if (severity === "critical") return "red";
   if (severity === "warning") return "purple";
+  if (severity === "info") return "blue";
   return "neutral";
 }
 

@@ -42,7 +42,8 @@ def main() -> int:
     cloud.start_poll_fallback()
     ctl = AdaptiveController()
     print(f"[pi] running junction={settings.junction_id} "
-          f"(mqtt primary + http poll every {settings.command_poll_interval_s}s)",
+          f"(mqtt primary; http poll fallback every "
+          f"{settings.command_poll_interval_s}s when mqtt down)",
           flush=True)
     try:
         while True:
@@ -50,10 +51,10 @@ def main() -> int:
                 print(f"[pi] command {cmd.type} approach={cmd.approach}", flush=True)
                 if cmd.type in ("PRIORITY_REQUEST", "FORCE_RELEASE"):
                     ctl.hold_green(cmd.approach)
-                    cloud.ack(cmd.id)
+                    cloud.ack(cmd)  # Command → ack body carries {"attempt": n}
                 elif cmd.type in ("RELEASE_PRIORITY", "CANCEL", "HOLD"):
                     ctl.release_override()
-                    cloud.ack(cmd.id)
+                    cloud.ack(cmd)
             cloud.send_heartbeat()
             time.sleep(settings.heartbeat_interval_s)
     except KeyboardInterrupt:

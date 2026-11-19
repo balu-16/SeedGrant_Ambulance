@@ -19,15 +19,23 @@ from app.services.geo_service import (
 
 
 def _command_payload(cmd: EmergencyCommand, ctype: str, junction_id: str, approach: str) -> dict:
-    """Spec-complete MQTT command payload."""
+    """Spec-complete MQTT command payload (contract §6 envelope).
+
+    Parity with GET /commands/pending: every published command carries the
+    command id, the 1-based attempt number (retry_count+1) and the per-junction
+    sequence, on top of the legacy keys.
+    """
     return {
         "type": ctype,
+        "id": str(cmd.id),
         "session_id": str(cmd.session_id),
         "junction_id": junction_id,
         "approach": approach,
         "command_type": cmd.command_type,
         "correlation_id": cmd.correlation_id,
-        "issued_at": datetime.now(UTC).isoformat(),
+        "attempt": (cmd.retry_count or 0) + 1,
+        "junction_seq": cmd.junction_seq,
+        "issued_at": (cmd.created_at or datetime.now(UTC)).isoformat(),
         "expires_at": cmd.expires_at.isoformat(),
         "retry_count": cmd.retry_count,
     }
@@ -37,13 +45,50 @@ async def publish_command(cmd: EmergencyCommand, junction_id: str, approach: str
     """Publish a command to the junction's MQTT command topic.
 
     Shared by the GPS pipeline and manual overrides so every published command
-    carries the same spec-complete payload."""
+    carries the same spec-complete payload. Superseded (HELD/RELEASED) or
+    expired commands are NEVER published — the device must not act on them.
+    """
+    if cmd.status in ("HELD", "RELEASED", "EXPIRED"):
+        from app.core.logging import get_logger
+
+        get_logger("gps").info(
+            "command_publish_suppressed",
+            command_id=str(cmd.id),
+            status=cmd.status,
+        )
+        return False
+    if cmd.expires_at is not None and cmd.expires_at < datetime.now(UTC):
+        return False
     from app.integrations.mqtt import publish_safe, topic_for
 
     return await publish_safe(
         topic_for(junction_id, "command"),
         _command_payload(cmd, cmd.command_type, junction_id, approach),
     )
+
+
+async def publish_pending_commands(db, publish_list) -> bool:
+    """Publish collected commands AFTER the calling transaction committed.
+
+    `publish_list` items are (command, junction_id, approach) tuples produced
+    by process_gps. The delivery rows were already inserted in the same
+    transaction as the command state change; here we only stamp published_at
+    on the delivery row — publish_safe never blocks the DB transaction. The
+    command itself stays PENDING until a device acknowledges it (broker
+    acceptance is not device receipt), keeping the HTTP poll path usable for
+    devices whose MQTT link is down.
+    """
+    all_sent = True
+    for cmd, jid, approach in publish_list:
+        sent = False
+        for _ in range(3):  # small in-request retry, prototype-grade
+            if await publish_command(cmd, jid, approach):
+                sent = True
+                break
+        if sent:
+            await cmds.mark_delivery_published(db, cmd)
+        all_sent = all_sent and sent
+    return all_sent
 
 
 async def process_gps(
@@ -63,11 +108,13 @@ async def process_gps(
     )
     cands = nearby_junctions(lat, lon, junctions)
     if not cands:
-        return {"nearby": [], "command": None, "should_publish": False}
+        return {"nearby": [], "command": None, "publish": []}
 
     mov_bearing = movement_bearing(prev_lat, prev_lon, lat, lon) if prev_lat is not None else None
     result_cmd = None
-    should_publish = False
+    # (command, junction_id, approach) tuples to publish AFTER the handler's
+    # commit — the delivery rows are inserted in this transaction
+    publish_list: list[tuple[EmergencyCommand, str, str]] = []
     nearby_out = []
 
     for j, dist in cands:
@@ -121,10 +168,9 @@ async def process_gps(
                 continue  # nothing to release for this junction
             result_cmd = await cmds.create_release(db, session.id, j.id, last_cmd.approach)
             session.status = "CROSSING"
+            publish_list.append((result_cmd, jid, result_cmd.approach))
             from app.integrations.notify import notify_user
 
-            if await emg.publish_release_commands([result_cmd]):
-                should_publish = True
             await notify_user(
                 db, session.driver_id, "Junction crossed", f"Priority released at {j.name}."
             )
@@ -138,14 +184,13 @@ async def process_gps(
                 continue  # junction deactivated — skip priority silently
             # Only claim PRIORITY_REQUESTED when the command is actually live
             # (new or re-armed) — a stale/HELD/RELEASED command found by
-            # correlation_id must not flip the session status back.
+            # natural key must not flip the session status back.
             if new_command:
                 if session.status in ("ACTIVE", "APPROACHING_JUNCTION", "CROSSING"):
                     session.status = "PRIORITY_REQUESTED"
                 from app.integrations.notify import resolve_player_ids, schedule_push
 
-                if await publish_command(cmd, jid, approach_dir):
-                    should_publish = True
+                publish_list.append((cmd, jid, approach_dir))
                 # resolve subscriptions in-request, then send in the background:
                 # a slow Expo endpoint must never add latency to the 1 Hz GPS fix
                 player_ids = await resolve_player_ids(db, session.driver_id)
@@ -162,5 +207,5 @@ async def process_gps(
     return {
         "nearby": nearby_out,
         "command": result_cmd,
-        "should_publish": should_publish,
+        "publish": publish_list,
     }

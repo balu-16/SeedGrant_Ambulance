@@ -22,6 +22,12 @@ class EmergencySession(Base):
     )
     status: Mapped[str] = mapped_column(String(32), default="ACTIVE", index=True)
     hospital: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Ownership snapshot: the ambulance's hospital at session start. Null on
+    # pre-migration records (admin-only visibility until reviewed) and for
+    # ambulances with no hospital. Never backfilled automatically (plan §4.2).
+    owner_hospital_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospitals.id"), nullable=True, index=True
+    )
     ended_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_gps_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -88,4 +94,34 @@ class EmergencyCommand(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ack_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0", default=0)
+    # Per-junction monotonic sequence (1-based) assigned at insert; null only on
+    # pre-migration rows. Lets devices order commands for their junction.
+    junction_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CommandDelivery(Base):
+    """One row per publish/poll attempt of a command (plan §4.2).
+
+    Inserted in the same transaction as the command state change and *before*
+    the MQTT publish happens, so delivery is durable across broker/process
+    loss and acknowledgements are idempotent per attempt.
+    """
+
+    __tablename__ = "command_deliveries"
+    __table_args__ = (
+        Index("uq_deliveries_command_attempt", "command_id", "attempt", unique=True),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    command_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("emergency_commands.id", ondelete="CASCADE"), index=True
+    )
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-based
+    correlation_id: Mapped[str] = mapped_column(String(64))
+    via: Mapped[str] = mapped_column(String(8))  # mqtt | poll
+    status: Mapped[str] = mapped_column(
+        String(16), default="PUBLISHED"
+    )  # PUBLISHED | ACKNOWLEDGED | FAILED
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

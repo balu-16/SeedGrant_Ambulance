@@ -109,7 +109,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Analytics",
     icon: "monitoring",
     roles: ["admin", "police"],
-    subtitle: "Crossing times, command outcomes and peak hours",
+    subtitle: "Command outcomes, request→ack and peak hours",
   },
   {
     to: "/audit",

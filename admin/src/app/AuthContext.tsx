@@ -1,17 +1,19 @@
 /**
- * Auth state for the portal.
+ * Auth state for the portal (contract §1/§9).
  *
- * Login flow contract (wired to real endpoints next phase — the client code
- * here is already final):
- *   1. POST /api/v1/auth/login { email, password }
- *      → { success, data: { access_token, refresh_token, user } }
- *      → tokens persisted under localStorage["admin-portal:tokens:v1"].
- *   2. GET /api/v1/auth/me (Bearer) re-verifies the account + role
- *      server-side; the response user is the source of truth for guards.
- *   3. DRIVER accounts are rejected — the mobile app is their client.
- *   4. On any 401 the api client runs a single-flight POST /auth/refresh and
- *      retries once; if refresh fails it clears tokens → RequireAuth
- *      redirects to /login.
+ * Session flow:
+ *   1. POST /api/v1/portal-auth/login { email, password }
+ *      → { success, data: { access_token, user } } — access token held in
+ *      module memory only (never localStorage); the refresh token lives in
+ *      the server-set HttpOnly portal_rt cookie.
+ *   2. Boot: POST /portal-auth/refresh (cookie + X-CSRF-Token) → GET /auth/me
+ *      re-verifies role + scope. 401 → login screen; network failure → retry
+ *      screen.
+ *   3. DRIVER accounts are rejected (403 server-side + client guard).
+ *   4. On any mid-session 401 the api client runs a single-flight
+ *      /portal-auth/refresh and retries once; if the refresh fails the session
+ *      is cleared here (user + query cache) and every other tab is told via
+ *      BroadcastChannel("portal-auth") — no stale authenticated screen.
  */
 
 import {
@@ -24,98 +26,92 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AuthContext } from "@/app/auth-context";
+import { ApiError, apiMe } from "@/services/api";
 import {
-  ApiError,
-  apiLogin,
-  apiLogout,
-  apiMe,
-  clearTokens,
-  getTokens,
-} from "@/services/api";
+  onSessionEvent,
+  portalLogin,
+  portalLogout,
+  portalRefresh,
+} from "@/services/portalAuth";
 import type { AuthUser } from "@/types/api";
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [booting, setBooting] = useState(true);
+  const [bootError, setBootError] = useState<string | null>(null);
   const bootstrapped = useRef(false);
   const queryClient = useQueryClient();
 
-  // Bootstrap: restore a session from stored tokens and re-verify via /me.
+  // Any session-loss event (this tab's failed refresh or another tab's
+  // logout/expired broadcast) clears user state + cache together, so a
+  // revoked session never leaves a stale authenticated screen.
+  const hardSignOut = useCallback(() => {
+    setUser(null);
+    queryClient.clear();
+  }, [queryClient]);
+
+  useEffect(
+    () => onSessionEvent(() => hardSignOut()),
+    [hardSignOut],
+  );
+
+  // Boot: cookie refresh → access token in memory → /auth/me. Network
+  // failure keeps a retry screen; 401 lands on the login screen.
+  const runBoot = useCallback(async () => {
+    setBootError(null);
+    setBooting(true);
+    try {
+      await portalRefresh();
+      const me = await apiMe();
+      setUser(me);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) {
+        setBootError(e.message);
+      } else {
+        setUser(null);
+      }
+    } finally {
+      setBooting(false);
+    }
+  }, []);
+
+  // Bootstrap once (StrictMode-safe, like the original bootstrapped ref).
   useEffect(() => {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
-    let cancelled = false;
-    (async () => {
-      if (!getTokens()) {
-        setBooting(false);
-        return;
-      }
-      try {
-        const me = await apiMe();
-        if (!cancelled) setUser(me);
-      } catch {
-        clearTokens();
-        if (!cancelled) setUser(null);
-      } finally {
-        if (!cancelled) setBooting(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void runBoot();
+  }, [runBoot]);
 
   const login = useCallback(
     async (email: string, password: string): Promise<AuthUser> => {
-      const res = await apiLogin(email.trim(), password);
-      if (res.user.role.toLowerCase() === "driver") {
-        // Drivers belong to the Expo app, not this portal.
-        clearTokens();
+      const u = await portalLogin(email, password);
+      if (u.role === "driver") {
+        // Drivers belong to the Expo app, not this portal (the server also
+        // rejects them with 403 DRIVER_ROLE_NOT_ALLOWED — belt and braces).
+        await portalLogout();
         throw new ApiError(
           "Driver accounts use the mobile app, not this portal.",
           403,
           "ROLE_NOT_ALLOWED",
         );
       }
-      // Re-verify server-side (role from the fresh token, not the login claim).
-      // A /me failure must NOT fall back to the login user: that payload lacks
-      // hospital_id/junction_ids, which would silently blank out the officer's
-      // or hospital's entire scope. Fail the login loudly instead.
-      let me: AuthUser;
-      try {
-        me = await apiMe();
-      } catch {
-        clearTokens();
-        throw new ApiError(
-          "Signed in, but the account profile could not be loaded — try again.",
-          502,
-          "PROFILE_UNAVAILABLE",
-        );
-      }
-      if (me.role.toLowerCase() === "driver") {
-        clearTokens();
-        throw new ApiError(
-          "Driver accounts use the mobile app, not this portal.",
-          403,
-          "ROLE_NOT_ALLOWED",
-        );
-      }
-      setUser(me);
+      setUser(u);
       queryClient.clear();
-      return me;
+      return u;
     },
     [queryClient],
   );
 
   const logout = useCallback(async () => {
-    await apiLogout();
-    setUser(null);
-    queryClient.clear();
-  }, [queryClient]);
+    // portalLogout also emits {type:"logout"} → hardSignOut runs via the
+    // listener; clearing here as well keeps the ordering deterministic.
+    await portalLogout();
+    hardSignOut();
+  }, [hardSignOut]);
 
   const value = useMemo(
-    () => ({ user, booting, login, logout }),
-    [user, booting, login, logout],
+    () => ({ user, booting, bootError, retryBoot: runBoot, login, logout }),
+    [user, booting, bootError, runBoot, login, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

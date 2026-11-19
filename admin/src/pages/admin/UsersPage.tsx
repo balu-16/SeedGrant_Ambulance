@@ -1,11 +1,13 @@
 /**
- * ADMIN Users (plan §4.1) — portal account management: create users
- * (ADMIN/HOSPITAL/POLICE/DRIVER with hospital/junction scoping), enable or
+ * ADMIN Users (plan §4.1) — portal account management: server-side search
+ * (q), role/status filters and limit/offset pagination over the full
+ * directory ({items,total,limit,offset}); create users (ADMIN/HOSPITAL/POLICE/
+ * DRIVER with hospital/junction scoping submitted together), enable or
  * disable accounts, and reset passwords (generated password shown exactly
  * once, with copy).
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import {
   createUser,
@@ -42,23 +44,40 @@ import {
   MiniButton,
   SelectField,
 } from "@/pages/admin/widgets";
+import { FreshnessCaption, StaleBanner } from "@/pages/shared/bits";
+import { isStale, useFreshnessThresholds } from "@/pages/shared/freshness";
 import "@/pages/admin/admin.css";
 
 const ROLES = ["admin", "hospital", "police", "driver"];
+const LIMIT = 25;
 
 export function UsersPage() {
   const qc = useQueryClient();
+  const thresholds = useFreshnessThresholds();
+  const [qInput, setQInput] = useState("");
+  const [q, setQ] = useState("");
+  const [role, setRole] = useState("");
+  const [status, setStatus] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [resetUser, setResetUser] = useState<PortalUser | null>(null);
+
   const users = useQuery({
-    queryKey: ["admin", "users"],
-    queryFn: () => listUsers({ limit: 200 }),
+    queryKey: ["admin", "users", q, role, status, offset],
+    queryFn: () =>
+      listUsers({
+        q: q || undefined,
+        role: role || undefined,
+        status: status || undefined,
+        limit: LIMIT,
+        offset,
+      }),
+    placeholderData: keepPreviousData,
   });
   const hospitals = useQuery({
     queryKey: ["admin", "hospitals"],
     queryFn: listHospitals,
   });
-
-  const [createOpen, setCreateOpen] = useState(false);
-  const [resetUser, setResetUser] = useState<PortalUser | null>(null);
 
   const toggleM = useMutation({
     mutationFn: (u: PortalUser) => patchUser(u.id, { is_active: !u.is_active }),
@@ -73,9 +92,16 @@ export function UsersPage() {
       void qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
 
-  const hospitalNames = new Map(
-    (hospitals.data ?? []).map((h) => [h.id, h.name]),
-  );
+  const items = users.data?.items ?? [];
+  const total = users.data?.total;
+  const stale =
+    users.data !== undefined &&
+    isStale(users.dataUpdatedAt, thresholds.portalStaleSeconds);
+
+  const applyFilter = () => {
+    setQ(qInput.trim());
+    setOffset(0);
+  };
 
   const columns: TableColumn<PortalUser>[] = [
     { key: "email", header: "Email", render: (u) => u.email },
@@ -124,7 +150,7 @@ export function UsersPage() {
       key: "hospital",
       header: "Hospital",
       render: (u) =>
-        u.hospital_id ? (hospitalNames.get(u.hospital_id) ?? shortId(u.hospital_id)) : "—",
+        u.hospital_id ? (hospitals.data?.find((h) => h.id === u.hospital_id)?.name ?? shortId(u.hospital_id)) : "—",
     },
     {
       key: "junctions",
@@ -158,28 +184,128 @@ export function UsersPage() {
           onRetry={() => toggleM.reset()}
         />
       )}
-
-      {users.isError ? (
+      {roleM.isError && (
         <ErrorCard
-          title="Could not load users"
+          title="Could not update the role"
+          error={roleM.error}
+          onRetry={() => roleM.reset()}
+        />
+      )}
+      <StaleBanner stale={stale} />
+
+      <div className="admin-toolbar">
+        <Field
+          label="Search email"
+          icon="search"
+          type="search"
+          value={qInput}
+          onChange={(e) => setQInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") applyFilter();
+          }}
+          placeholder="e.g. hospital@"
+        />
+        <MiniButton title="Search" tone="primary" onClick={applyFilter} />
+        {q !== "" && (
+          <MiniButton
+            title="Clear"
+            onClick={() => {
+              setQInput("");
+              setQ("");
+              setOffset(0);
+            }}
+          />
+        )}
+        <SelectField
+          label="Role"
+          value={role}
+          onChange={(v) => {
+            setRole(v);
+            setOffset(0);
+          }}
+        >
+          <option value="">All roles</option>
+          {ROLES.map((r) => (
+            <option key={r} value={r}>
+              {r.toUpperCase()}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField
+          label="Status"
+          value={status}
+          onChange={(v) => {
+            setStatus(v);
+            setOffset(0);
+          }}
+        >
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="disabled">Disabled</option>
+        </SelectField>
+        {users.data && (
+          <FreshnessCaption updatedAt={users.dataUpdatedAt} />
+        )}
+      </div>
+
+      {/* Failed refetch keeps the previous table (keepPreviousData) and
+          renders as a banner — never an empty/zero state. */}
+      {users.isError && (
+        <ErrorCard
+          title={
+            items.length > 0
+              ? "Could not refresh users — showing the last loaded rows"
+              : "Could not load users"
+          }
           error={users.error}
           onRetry={() => void users.refetch()}
         />
-      ) : users.isLoading ? (
+      )}
+
+      {users.isPending && !users.data ? (
         <LoadingBlock label="Loading users" />
       ) : (
-        <Table
-          columns={columns}
-          rows={users.data?.items ?? []}
-          keyOf={(u) => u.id}
-          emptyFallback={
-            <Empty
-              icon="group"
-              title="No users yet"
-              body="Create ADMIN, HOSPITAL, POLICE or DRIVER portal accounts here."
+        <>
+          <div className="admin-toolbar" style={{ justifyContent: "flex-end" }}>
+            <Txt muted>
+              {total != null
+                ? `${offset + 1}–${offset + items.length} of ${total}`
+                : `offset ${offset} · ${items.length} rows`}
+            </Txt>
+            <MiniButton
+              title="Prev"
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - LIMIT))}
             />
-          }
-        />
+            <MiniButton
+              title="Next"
+              disabled={
+                total != null ? offset + LIMIT >= total : items.length < LIMIT
+              }
+              onClick={() => setOffset(offset + LIMIT)}
+            />
+          </div>
+          <Table
+            columns={columns}
+            rows={items}
+            keyOf={(u) => u.id}
+            emptyFallback={
+              users.isError ? null : (q || role || status) !== "" ? (
+                <Empty
+                  icon="group"
+                  title="No users match these filters"
+                  body="Try a different search term or clear the role/status filters."
+                />
+              ) : (
+                <Empty
+                  icon="group"
+                  title="No users yet"
+                  body="Create ADMIN, HOSPITAL, POLICE or DRIVER portal accounts here."
+                />
+              )
+            }
+          />
+        </>
       )}
 
       <CreateUserDrawer open={createOpen} onClose={() => setCreateOpen(false)} />
@@ -215,6 +341,7 @@ function CreateUserDrawer({
   const [junctionIds, setJunctionIds] = useState<string[]>([]);
   const [formErr, setFormErr] = useState<string | null>(null);
 
+  // Role + scope are submitted together in one request (plan §3.1).
   const createM = useMutation({
     mutationFn: () =>
       createUser({

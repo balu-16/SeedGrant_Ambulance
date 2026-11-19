@@ -83,9 +83,92 @@ seed only. Refresh tokens rotate on every refresh; a rotated token is rejected.
 - `POST|GET /vision/detections` (Pi-side inference ingest + portal listing; the server runs no model)
 - `GET /health`, `GET /ready` (503 when DB down)
 
+## Portal sessions (dashboard auth)
+
+Portal roles (ADMIN/HOSPITAL/POLICE) sign in through `POST /portal-auth/login`
+— driver accounts are rejected there. The server keeps a `portal_sessions`
+row per login (SHA-256 hashed opaque refresh token + CSRF token hash), the
+browser holds only an HttpOnly `portal_rt` cookie (SameSite=Lax, `Secure`
+outside loopback dev) plus a readable `portal_csrf` cookie, and refresh/logout
+must send `X-CSRF-Token` and a same-origin `Origin` (validated against
+`CORS_ORIGINS`). Access tokens are short-lived JWTs (~15 min,
+`PORTAL_ACCESS_TOKEN_MINUTES`) carrying a `sid` claim checked against session
+revocation, so logout, password change/reset and account disable take effect
+immediately. The driver `/auth/*` contract is unchanged — no cookies, no sid.
+
+## Isolated demo / simulator (no live data, no hardware)
+
+```bash
+server/scripts/run_demo.sh        # docker compose db-demo (:5433) → alembic → seed → uvicorn on 127.0.0.1:8000
+.venv/bin/python -m scripts.simulator --seed-only    # just (re)seed demo data
+.venv/bin/python -m scripts.simulator                # full scripted journey (add --skip-long-waits to skip 5-min waits)
+```
+
+The journey drives the whole lifecycle against the running demo backend:
+emergency start → GPS walk-in → PRIORITY_REQUEST → device poll + ack → HOLD
+(release published, pending until acked) → REISSUE (attempt 2) →
+FORCE_RELEASE → TTL expiry → inactivity timeout → device-offline — printing
+PASS/FAIL per step, exit 1 on failure. Demo accounts:
+`admin@demo.io/Admin123!`, `hospital@demo.io/Hospital123!`,
+`police@demo.io/Police123!`, `driver@demo.io/Demo123!` (junction "Demo
+Junction", ambulance DEMO-101; the device api key is printed once per seed).
+
+Fail-closed gating: the backend refuses to boot with `DEMO_MODE=1` unless
+`ENVIRONMENT=dev`, `MQTT_PROVIDER=mock` and both DB URLs point at a localhost
+`*demo*` database; in demo mode `server/.env` is ignored entirely
+(`get_settings` uses `_env_file=None`). The simulator re-validates the same
+gates before seeding or sending anything and never touches push services.
+
+## Migrations (0011–0014)
+
+- `0011_portal_sessions` — server-side dashboard sessions.
+- `0012_owner_hospital` — `emergency_sessions.owner_hospital_id` ownership
+  snapshot (nullable; NO backfill — old records stay admin-only until the
+  admin review action `PATCH /admin/emergencies/{id}/hospital-ownership`).
+- `0013_command_deliveries` — per-attempt delivery rows persisted in the same
+  transaction as the command state change, before the MQTT publish; adds
+  `emergency_commands.junction_seq`.
+- `0014_role_varchar_compat` — forward fix for 0009: `users.role` back to
+  VARCHAR(16) + CHECK constraint (the portal_role_lc ENUM broke every ORM
+  INSERT on Postgres; the live Supabase DB never applied 0009 so it never
+  surfaced there). `alembic downgrade` reverses it.
+
+Verify on a fresh DB and an upgraded-from-0010 DB before deploying:
+
+```bash
+alembic upgrade head   # fresh DB
+alembic downgrade 0010_composite_index_parity && alembic upgrade head
+```
+
+## Tests
+
+```bash
+.venv/bin/python -m pytest          # 164 tests, hermetic SQLite + mock MQTT (no live services)
+.venv/bin/ruff check app scripts tests
+```
+
+New suites: `test_portal_auth` (cookie/CSRF/origin/rotation/revocation),
+`test_ownership` (snapshot, transfer guard, review action),
+`test_emergency_filters_export` (filters, CSV escaping),
+`test_command_lifecycle` (hold/reissue/force-release, idempotent acks,
+stale attempts), `test_simulator_gating` (fail-closed demo gates).
+
+## Known limitations
+
+- A command acknowledgement proves the junction device RECEIVED the command —
+  never that a physical signal changed. Manual controls are enabled only for
+  the isolated demo (`DEMO_MODE=1`); real-device enablement is a separate
+  hardware-validation effort.
+- Alerts are a derived in-portal feed (no email/SMS/push advertisement).
+- Pi camera/telemetry publishing is not wired into `raspberryPi/src/main.py`
+  (no physical hardware in this phase); the simulator produces telemetry
+  instead.
+
 ## Admin portal hosting
 
 The portal deploys standalone on Vercel (see `../admin/README.md`) and calls
 this API cross-origin via `VITE_API_URL`, so keep `CORS_ORIGINS` in sync with
-the Vercel URL. The Render image contains only the backend; the portal is not
-served from FastAPI.
+the Vercel URL (the allowlist also gates the portal-refresh Origin check).
+`../admin/vercel.json` rewrites `/api/*` here so portal cookies stay
+same-origin in production. The Render image contains only the backend; the
+portal is not served from FastAPI.

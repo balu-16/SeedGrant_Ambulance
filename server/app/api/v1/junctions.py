@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.core.consts import ACTIVE_SESSION_STATUSES, OPEN_COMMAND_STATUSES
 from app.core.dependencies import get_db, police_junction_ids, require_any, require_role
 from app.core.exceptions import Conflict, Forbidden, NotFound
+from app.models.device import Device
 from app.models.emergency import EmergencyCommand, EmergencySession
 from app.models.junction import Approach, Junction
 from app.schemas.common import JunctionIn, JunctionPatchIn, OverrideIn
@@ -194,7 +195,7 @@ async def update_junction(
     if release_commands:
         from app.services.emergency_service import publish_release_commands
 
-        release_sent = await publish_release_commands(release_commands)
+        release_sent = await publish_release_commands(db, release_commands)
         await db.commit()
     return {
         "success": True,
@@ -271,8 +272,12 @@ async def override_junction(
 ):
     """Manual priority override — ADMIN anywhere, POLICE on assigned junctions only.
 
-    FORCE_RELEASE issues a RELEASE_PRIORITY (published to the Pi), HOLD expires
-    the open priority silently, REISSUE re-arms the latest expired priority.
+    HOLD shelves the open request as HELD (blocking GPS re-arm); when the
+    device may already have received it (SENT/ACKNOWLEDGED delivery), a
+    RELEASE_PRIORITY is also published and reported as pending until acked.
+    REISSUE re-arms an EXPIRED/HELD request as a NEW attempt (new correlation
+    suffix, delivery row) once any required release is acknowledged.
+    FORCE_RELEASE publishes a release for any open or held request.
     Every call requires a reason and is audit-logged with the officer identity.
     """
     if str(user.role).lower() == "police":
@@ -284,51 +289,135 @@ async def override_junction(
     if not j.is_active:
         raise Conflict("Junction is deactivated — override not allowed")
     now = datetime.now(UTC)
-    release_sent = True
-    if body.action in ("FORCE_RELEASE", "HOLD"):
+    cfg = get_settings()
+
+    release_cmd = None
+    to_publish = None  # (command, junction_id, approach) published post-commit
+    if body.action == "HOLD":
         cmd = await _latest_command(db, jid, OPEN_COMMAND_STATUSES)
         if not cmd:
-            raise Conflict("No open priority command at this junction")
-        if body.action == "FORCE_RELEASE":
-            cmd = await command_service.create_release(db, cmd.session_id, jid, cmd.approach)
-            from app.services.emergency_service import publish_release_commands
-
-            release_sent = await publish_release_commands([cmd])
-        else:  # HOLD: shelve the open command, nothing is published. HELD (not
-            # EXPIRED, which the GPS pipeline re-arms) so the officer's decision
-            # survives subsequent fixes until FORCE_RELEASE/REISSUE.
-            cmd.status = "HELD"
-    else:  # REISSUE
-        cmd = await _latest_command(db, jid, ("EXPIRED",))
+            raise Conflict(
+                "No open priority command at this junction", code="NO_OPEN_COMMAND"
+            )
+        # Did the current attempt reach the device? A PUBLISHED/ACKNOWLEDGED
+        # delivery row is authoritative; SENT/ACKNOWLEDGED command status is
+        # the legacy fallback (pre-delivery rows).
+        delivered = False
+        d = await command_service.get_delivery(db, cmd)
+        if d is not None and d.status in ("PUBLISHED", "ACKNOWLEDGED"):
+            delivered = True
+        elif cmd.status in ("SENT", "ACKNOWLEDGED"):
+            delivered = True
+        # HELD (not EXPIRED, which the GPS pipeline re-arms) so the officer's
+        # decision survives subsequent fixes until FORCE_RELEASE/REISSUE.
+        cmd.status = "HELD"
+        if delivered:
+            # keep HELD (mark_released=False) — the officer may REISSUE later
+            release_cmd = await command_service.create_release(
+                db, cmd.session_id, jid, cmd.approach, mark_released=False
+            )
+            to_publish = (release_cmd, str(jid), release_cmd.approach)
+    elif body.action == "REISSUE":
+        cmd = await _latest_command(db, jid, ("EXPIRED", "HELD"))
         if not cmd:
-            raise Conflict("No expired priority command to re-issue at this junction")
-        cmd.status = "PENDING"
-        cmd.expires_at = now + timedelta(seconds=get_settings().COMMAND_TTL_SECONDS)
-        cmd.retry_count = (cmd.retry_count or 0) + 1
-        await publish_command(cmd, str(jid), cmd.approach)
+            raise Conflict(
+                "No expired or held priority command to re-issue at this junction",
+                code="NO_REISSUABLE_COMMAND",
+            )
+        sess = (
+            await db.execute(
+                select(EmergencySession).where(EmergencySession.id == cmd.session_id)
+            )
+        ).scalar_one_or_none()
+        if sess is None or sess.status not in ACTIVE_SESSION_STATUSES:
+            raise Conflict("Session is not active — reissue not allowed")
+        dev = (
+            await db.execute(select(Device).where(Device.junction_id == jid))
+        ).scalar_one_or_none()
+        if dev is None:
+            raise Conflict("Junction has no registered device to re-issue to")
+        outstanding = (
+            await db.execute(
+                select(EmergencyCommand.id).where(
+                    EmergencyCommand.session_id == cmd.session_id,
+                    EmergencyCommand.junction_id == jid,
+                    EmergencyCommand.command_type == "RELEASE_PRIORITY",
+                    EmergencyCommand.status.in_(("PENDING", "SENT")),
+                )
+            )
+        ).scalars().first()
+        if outstanding is not None:
+            raise Conflict(
+                "A release command is still outstanding — the device has not acknowledged it",
+                code="RELEASE_OUTSTANDING",
+            )
+        if cmd.status == "EXPIRED":
+            if not command_service.rearm_command(cmd, cfg, now):
+                raise Conflict(
+                    "Command retry cap reached — cannot re-issue",
+                    code="NO_REISSUABLE_COMMAND",
+                )
+        else:  # HELD: manual re-arm (rearm_command only handles EXPIRED)
+            cmd.status = "PENDING"
+            cmd.expires_at = now + timedelta(seconds=cfg.COMMAND_TTL_SECONDS)
+            cmd.retry_count = (cmd.retry_count or 0) + 1
+            cmd.correlation_id = command_service.attempt_correlation(
+                command_service.correlation_id(
+                    cmd.session_id, cmd.junction_id, cmd.approach, cmd.command_type
+                ),
+                command_service.current_attempt(cmd),
+            )
+        # delivery row in the same transaction as the state change
+        await command_service.record_delivery(db, cmd, via="mqtt")
+        to_publish = (cmd, str(jid), cmd.approach)
+    else:  # FORCE_RELEASE
+        cmd = await _latest_command(db, jid, OPEN_COMMAND_STATUSES + ("HELD",))
+        if not cmd:
+            raise Conflict(
+                "No open priority command at this junction", code="NO_OPEN_COMMAND"
+            )
+        release_cmd = await command_service.create_release(db, cmd.session_id, jid, cmd.approach)
+        to_publish = (release_cmd, str(jid), release_cmd.approach)
+    detail = {
+        "junction_id": str(jid),
+        "action": body.action,
+        "reason": body.reason,
+        "officer_id": str(user.id),
+        "command_id": str(cmd.id),
+        "session_id": str(cmd.session_id),
+        "attempt": command_service.current_attempt(cmd),
+    }
+    if release_cmd is not None:
+        detail["release_command_id"] = str(release_cmd.id)
     _audit(
         db,
         str(user.id),
         "junction.override",
         "emergency_commands",
-        {
-            "junction_id": str(jid),
-            "action": body.action,
-            "reason": body.reason,
-            "officer_id": str(user.id),
-            "command_id": str(cmd.id),
-            "session_id": str(cmd.session_id),
-        },
+        detail,
     )
     await db.commit()
+    # Publish AFTER commit (delivery rows are already durable). publish_safe
+    # never blocks the DB and returns False when the command is superseded.
+    publish_ok = True
+    if to_publish is not None:
+        publish_cmd, pub_jid, pub_approach = to_publish
+        if body.action == "REISSUE":
+            publish_ok = await publish_command(publish_cmd, pub_jid, pub_approach)
+            if publish_ok:
+                await command_service.mark_delivery_published(db, publish_cmd)
+        else:
+            from app.services.emergency_service import publish_release_commands
+
+            publish_ok = await publish_release_commands(db, [publish_cmd])
+        await db.commit()
     # Driver push: the officer's action changes what the driver will see at
     # this junction — never leave the driver blind. Best-effort via session.
     from app.integrations.notify import notify_user
-    from app.models.emergency import EmergencySession as _EmergencySession
 
     _sess = (
         await db.execute(
-            select(_EmergencySession).where(_EmergencySession.id == cmd.session_id)
+            select(EmergencySession).where(EmergencySession.id == cmd.session_id)
         )
     ).scalar_one_or_none()
     if _sess is not None:
@@ -347,20 +436,51 @@ async def override_junction(
             ),
         }[body.action]
         await notify_user(db, _sess.driver_id, _copy[0], _copy[1], event_key="officer_override")
+
+    def _identity(c) -> dict:
+        return {
+            "id": str(c.id),
+            "type": c.command_type,
+            "status": c.status,
+            "approach": c.approach,
+            "correlation_id": c.correlation_id,
+            "attempt": (c.retry_count or 0) + 1,
+            "expires_at": c.expires_at.isoformat() if c.expires_at else None,
+        }
+
+    delivery_out = None
+    if to_publish is not None:
+        delivery_out = {
+            "status": "PENDING" if publish_ok else "PUBLISH_FAILED",
+            "via": "mqtt",
+        }
+    if body.action == "HOLD":
+        message = (
+            f"Priority held at {j.name}; release published to the device"
+            if release_cmd is not None
+            else f"Priority held at {j.name}; nothing had reached the device"
+        )
+    elif body.action == "REISSUE":
+        message = (
+            f"Priority re-issued for {j.name} ({cmd.approach} approach) as attempt "
+            f"{command_service.current_attempt(cmd)}"
+            + ("" if publish_ok else " — publish failed, will retry")
+        )
+    else:
+        message = (
+            f"Release published for {j.name} ({release_cmd.approach} approach)"
+            if release_cmd is not None and publish_ok
+            else f"Release queued for {j.name} ({release_cmd.approach} approach)"
+            if release_cmd is not None
+            else "Nothing to release"
+        )
     return {
         "success": True,
         "data": {
-            "junction_id": str(jid),
             "action": body.action,
-            "command": {
-                "id": str(cmd.id),
-                "type": cmd.command_type,
-                "status": cmd.status,
-                "approach": cmd.approach,
-                "correlation_id": cmd.correlation_id,
-                "retry_count": cmd.retry_count,
-            },
-            "release_sent": release_sent,
-            "release_pending": not release_sent,
+            "command": _identity(cmd),
+            "release": _identity(release_cmd) if release_cmd is not None else None,
+            "delivery": delivery_out,
+            "message": message,
         },
     }

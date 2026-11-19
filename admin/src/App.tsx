@@ -11,9 +11,10 @@
  */
 
 import type { ReactNode } from "react";
+import { Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "@/app/auth-context";
-import { RequireAuth, RoleRoute } from "@/app/RequireAuth";
+import { BootScreen, RequireAuth, RoleRoute } from "@/app/RequireAuth";
 import { Shell } from "@/app/Shell";
 import { rolesForPath, routedPaths } from "@/app/nav";
 import { LoginPage } from "@/pages/LoginPage";
@@ -48,33 +49,37 @@ const ROUTE_PATHS = routedPaths();
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route
-        element={
-          <RequireAuth>
-            <Shell />
-          </RequireAuth>
-        }
-      >
-        {ROUTE_PATHS.map((to) => {
-          const entries = ENTRIES_BY_PATH.get(to);
-          if (!entries) return null;
-          return (
-            <Route
-              key={to}
-              path={to === "/" ? undefined : to.slice(1)}
-              index={to === "/"}
-              element={
-                <RoleRoute roles={rolesForPath(to)}>
-                  <RoleSwitch entries={entries} />
-                </RoleRoute>
-              }
-            />
-          );
-        })}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
-    </Routes>
+    // Lazy-loaded heavy routes (map/analytics/audit/system/devices) resolve
+    // against the existing boot spinner — /login and the dashboards are eager.
+    <Suspense fallback={<BootScreen />}>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          element={
+            <RequireAuth>
+              <Shell />
+            </RequireAuth>
+          }
+        >
+          {ROUTE_PATHS.map((to) => {
+            const entries = ENTRIES_BY_PATH.get(to);
+            if (!entries) return null;
+            return (
+              <Route
+                key={to}
+                path={to === "/" ? undefined : to.slice(1)}
+                index={to === "/"}
+                element={
+                  <RoleRoute roles={rolesForPath(to)}>
+                    <RoleSwitch entries={entries} />
+                  </RoleRoute>
+                }
+              />
+            );
+          })}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </Suspense>
   );
 }

@@ -136,12 +136,17 @@ async def test_ack_command_from_other_junction_is_403_idor_guard(
         row = await s.get(EmergencyCommand, cmd.id)
         assert row.status == "PENDING"  # the forbidden ack mutated nothing
 
-    # the owning device acks it, and only once
+    # the owning device acks it
     ok = await client.post(f"/api/v1/commands/{cmd.id}/ack", headers=device_headers(device))
     assert ok.status_code == 200, ok.text
     assert ok.json()["data"]["acked"] is True
+    # duplicate ack of the SAME attempt is idempotent per contract §6:
+    # 200 with already=true (never a second state flip)
     twice = await client.post(f"/api/v1/commands/{cmd.id}/ack", headers=device_headers(device))
-    assert twice.status_code == 409
+    assert twice.status_code == 200, twice.text
+    dup = twice.json()["data"]
+    assert dup["acked"] is True and dup["already"] is True
+    assert dup["attempt"] == 1 and dup["status"] == "ACKNOWLEDGED"
 
 
 async def test_ack_unknown_command_404(client, device):

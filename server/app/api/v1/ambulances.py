@@ -168,6 +168,18 @@ async def update_ambulance(
     a = await get_ambulance(db, aid)
     if not a:
         raise NotFound("Ambulance not found")
+    # Lock the ambulance row for the transfer check + update. start_session
+    # takes the same lock, so a concurrent emergency-start cannot slip an
+    # ACTIVE session past this guard (and vice versa).
+    locked = (
+        (
+            await db.execute(select(Ambulance).where(Ambulance.id == aid).with_for_update())
+        )
+        .scalars()
+        .first()
+    )
+    if locked is not None:
+        a = locked
     if str(user.role).lower() == "hospital":
         scope = hospital_scope(user)
         # an unassigned HOSPITAL user owns nothing (None == None would pass!)
@@ -199,6 +211,29 @@ async def update_ambulance(
             changes["previous_driver_id"] = previous
         a.driver_id = body.driver_id
     if "hospital_id" in fields and body.hospital_id != a.hospital_id:
+        # Ownership guard: an ambulance mid-emergency belongs to the hospital
+        # its ACTIVE session snapshot recorded — moving it now would strand
+        # the live session under the old owner with a contradicting fleet row.
+        from app.core.consts import ACTIVE_SESSION_STATUSES as _ACTIVE
+        from app.models.emergency import EmergencySession as _Session
+
+        active = (
+            (
+                await db.execute(
+                    select(_Session.id).where(
+                        _Session.ambulance_id == a.id,
+                        _Session.status.in_(_ACTIVE),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if active is not None:
+            raise Conflict(
+                "Ambulance is in an active emergency — hospital transfer blocked",
+                code="AMBULANCE_IN_EMERGENCY",
+            )
         if body.hospital_id is not None:
             await _require_hospital(db, body.hospital_id)
         changes["hospital_id"] = str(body.hospital_id)

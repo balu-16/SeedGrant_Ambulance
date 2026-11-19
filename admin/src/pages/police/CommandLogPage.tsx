@@ -116,59 +116,80 @@ export function PoliceCommandLogPage() {
       </div>
 
       {commands.error && (
-        <InlineError error={commands.error} fallback="Could not load the command log." />
+        <InlineError
+          error={commands.error}
+          fallback={
+            rows.length > 0
+              ? "Could not refresh the command log — showing the last loaded rows."
+              : "Could not load the command log."
+          }
+        />
       )}
 
       {commands.isLoading ? (
         <Loading label="Loading commands" />
-      ) : rows.length === 0 ? (
+      ) : rows.length === 0 && !commands.error ? (
         <Empty
           icon="terminal"
           title="No commands found"
           body="Priority commands issued to your junctions (with retries and acknowledgement state) appear here."
         />
-      ) : (
-        <Table
-          rows={rows}
-          keyOf={(row) => row.id}
-          columns={[
-            {
-              key: "created_at",
-              header: "Created",
-              render: (row) => fmtDateTime(row.created_at),
-            },
-            { key: "type", header: "Type", render: (row) => <Txt style={{ fontWeight: 600 }}>{row.type}</Txt> },
-            {
-              key: "status",
-              header: "Status",
-              render: (row) => (
-                <Badge label={row.status} tone={statusBadgeTone(row.status)} />
-              ),
-            },
-            { key: "approach", header: "Approach", render: (row) => row.approach || "—" },
-            {
-              key: "junction",
-              header: "Junction",
-              render: (row) => nameByJunction.get(row.junction_id) ?? row.junction_id,
-            },
-            { key: "retry_count", header: "Retries", align: "right" },
-            {
-              key: "expires_at",
-              header: "Expires",
-              render: (row) => fmtDateTime(row.expires_at),
-            },
-            {
-              key: "ack_at",
-              header: "Acked",
-              render: (row) => fmtDateTime(row.ack_at),
-            },
-            {
-              key: "correlation_id",
-              header: "Correlation",
-              render: (row) => <Correlation value={row.correlation_id} />,
-            },
-          ]}
-        />
+      ) : rows.length === 0 ? null : (
+        <>
+          <Table
+            rows={rows}
+            keyOf={(row) => row.id}
+            columns={[
+              {
+                key: "created_at",
+                header: "Issued",
+                render: (row) => fmtDateTime(row.issued_at ?? row.created_at),
+              },
+              { key: "type", header: "Type", render: (row) => <Txt style={{ fontWeight: 600 }}>{row.type}</Txt> },
+              {
+                key: "status",
+                header: "Status",
+                render: (row) => (
+                  <Badge label={row.status} tone={statusBadgeTone(row.status)} />
+                ),
+              },
+              { key: "approach", header: "Approach", render: (row) => row.approach || "—" },
+              {
+                key: "junction",
+                header: "Junction",
+                render: (row) => nameByJunction.get(row.junction_id) ?? row.junction_id,
+              },
+              {
+                key: "attempt",
+                header: "Attempt",
+                align: "right",
+                render: (row) => String(row.attempt ?? row.retry_count + 1),
+              },
+              { key: "retry_count", header: "Retries", align: "right" },
+              {
+                key: "expires_at",
+                header: "Expires",
+                render: (row) => fmtDateTime(row.expires_at),
+              },
+              {
+                key: "ack_at",
+                header: "Device ack",
+                render: (row) => fmtDateTime(row.ack_at),
+              },
+              {
+                key: "correlation_id",
+                header: "Correlation",
+                render: (row) => <Correlation value={row.correlation_id} />,
+              },
+            ]}
+          />
+          <Txt muted>
+            "Device ack" is the moment the junction controller acknowledged
+            receipt of the command — it does not confirm that the signal
+            itself changed. Attempts are 1-based; retries issue a new attempt
+            with a fresh correlation id.
+          </Txt>
+        </>
       )}
     </div>
   );

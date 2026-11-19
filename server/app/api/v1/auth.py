@@ -127,6 +127,10 @@ async def change_password(
     except ValueError as e:
         raise AppError(str(e), status_code=422, code="WEAK_PASSWORD") from None
     user.refresh_version = (user.refresh_version or 0) + 1
+    # portal cookie sessions die too (same trust event as a refresh-token bump)
+    from app.api.v1.portal_auth import revoke_user_portal_sessions
+
+    await revoke_user_portal_sessions(db, user.id)
     await db.commit()
     return {"success": True, "data": {"changed": True}}
 

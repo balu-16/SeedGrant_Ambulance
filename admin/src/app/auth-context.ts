@@ -9,8 +9,15 @@ import type { AuthUser } from "@/types/api";
 export interface AuthContextValue {
   /** Signed-in portal user (null when logged out). */
   user: AuthUser | null;
-  /** True while the stored-token bootstrap (/auth/me) is running. */
+  /** True while the boot refresh (/portal-auth/refresh + /auth/me) runs. */
   booting: boolean;
+  /**
+   * Boot failure message set only when the server is unreachable
+   * (NETWORK_ERROR) — the login redirect covers session-invalid boots.
+   */
+  bootError: string | null;
+  /** Re-run the boot sequence from the BootScreen retry button. */
+  retryBoot: () => void;
   login: (email: string, password: string) => Promise<AuthUser>;
   logout: () => Promise<void>;
 }

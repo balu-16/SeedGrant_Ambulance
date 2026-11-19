@@ -13,6 +13,7 @@ from app.models.user import User
 from app.repositories.user_repo import get_ambulance
 from app.schemas.common import GpsIn, StartEmergencyIn
 from app.services import emergency_service as emg
+from app.services import gps_service
 from app.services.gps_service import process_gps
 from app.services.sweep_service import sweep_timeouts
 from app.utils.geo import haversine_m
@@ -112,7 +113,7 @@ async def gps(sid: uuid.UUID, body: GpsIn, db=Depends(get_db), user=Depends(get_
         # discover the timeout itself.  Timeout discovery must use the same
         # release path as an explicit stop; otherwise an already-held signal
         # could survive a timed-out session.
-        await emg.publish_release_commands(releases)
+        await emg.publish_release_commands(db, releases)
         await db.commit()
         # Inline flip (sweeper was interval-gated): tell the driver, once —
         # skip when the session was already TIMED_OUT (sweeper notified).
@@ -200,7 +201,13 @@ async def gps(sid: uuid.UUID, body: GpsIn, db=Depends(get_db), user=Depends(get_
         prev_lon=last.longitude if last else None,
         prev_dist_map=prev_map,
     )
+    # Publish AFTER the command/delivery rows commit: the MQTT send must never
+    # block the DB transaction, and the delivery record exists before any
+    # publish attempt (contract §6).
     await db.commit()
+    should_publish = await gps_service.publish_pending_commands(db, out["publish"])
+    if out["publish"]:
+        await db.commit()
     cmd = out["command"]
     return {
         "success": True,
@@ -210,7 +217,7 @@ async def gps(sid: uuid.UUID, body: GpsIn, db=Depends(get_db), user=Depends(get_
             if cmd
             else None,
             "status": s.status,
-            "should_publish": bool(out.get("should_publish")),
+            "should_publish": bool(should_publish),
         },
     }
 
@@ -271,7 +278,7 @@ async def current(db=Depends(get_db), user=Depends(get_current_user)):
     if emg.apply_timeouts(s) and _was_active:
         releases = await emg.release_session_commands(db, s.id)
         await db.commit()
-        release_sent = await emg.publish_release_commands(releases)
+        release_sent = await emg.publish_release_commands(db, releases)
         from app.integrations.notify import resolve_player_ids, schedule_push
 
         try:
@@ -317,7 +324,7 @@ async def stop(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_user
         )
     )
     await db.commit()
-    release_sent = await emg.publish_release_commands(releases)
+    release_sent = await emg.publish_release_commands(db, releases)
     await db.commit()
     from app.integrations.notify import notify_user
 
@@ -354,7 +361,7 @@ async def cancel(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_us
         )
     )
     await db.commit()
-    release_sent = await emg.publish_release_commands(releases)
+    release_sent = await emg.publish_release_commands(db, releases)
     await db.commit()
     from app.integrations.notify import notify_user
 
@@ -423,10 +430,20 @@ async def patient(
 
 @router.get("/{sid}/timeline")
 async def timeline(sid: uuid.UUID, db=Depends(get_db), user=Depends(get_current_user)):
-    """Event timeline for one session: commands + GPS count + audit entries."""
+    """Event timeline for one session: commands + GPS count + audit entries.
+
+    Access: owning driver, ADMIN, and the HOSPITAL user whose hospital owns
+    the session's ownership snapshot (NULL owner → ADMIN only). Police have no
+    timeline access (their command views stay junction-scoped).
+    """
 
     s = await emg.get_session(db, sid)
-    emg.ensure_owner(s, user)
+    role = str(user.role).lower()
+    if role != "admin" and s.driver_id != user.id:
+        if role != "hospital" or user.hospital_id is None or s.owner_hospital_id is None:
+            raise Forbidden("Not your emergency session")
+        if s.owner_hospital_id != user.hospital_id:
+            raise Forbidden("Not your hospital's emergency session")
     cmds = (
         (
             await db.execute(

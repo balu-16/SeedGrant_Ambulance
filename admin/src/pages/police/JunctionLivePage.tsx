@@ -13,6 +13,7 @@ import { useAuth } from "@/app/auth-context";
 import { currentNavItem, type PortalRole } from "@/app/nav";
 import { ApiError } from "@/services/api";
 import {
+  Badge,
   Button,
   Card,
   Empty,
@@ -31,7 +32,14 @@ import {
   overrideJunction,
 } from "@/services/portal";
 import type { OverrideResult } from "@/types/portal";
-import { Loading, InlineError, SelectField } from "@/pages/shared/bits";
+import {
+  FreshnessCaption,
+  InlineError,
+  Loading,
+  SelectField,
+  StaleBanner,
+} from "@/pages/shared/bits";
+import { isStale, useFreshnessThresholds } from "@/pages/shared/freshness";
 import { MapView, type MapDot } from "@/pages/shared/MapView";
 import {
   DEFAULT_CENTER,
@@ -57,6 +65,7 @@ export function PoliceJunctionLivePage() {
   const item = currentNavItem(pathname, (user?.role ?? "police") as PortalRole);
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const thresholds = useFreshnessThresholds();
 
   const junctionIds = useMemo(() => user?.junction_ids ?? [], [user]);
   const junctions = useQuery({ queryKey: ["junctions"], queryFn: listJunctions });
@@ -71,6 +80,9 @@ export function PoliceJunctionLivePage() {
     queryFn: fetchLive,
     refetchInterval: LIVE_REFRESH,
   });
+  const stale =
+    live.data !== undefined &&
+    isStale(live.dataUpdatedAt, thresholds.portalStaleSeconds);
 
   const junctionId = junction?.id ?? "";
   const telemetry = useQuery({
@@ -122,13 +134,22 @@ export function PoliceJunctionLivePage() {
   const junctionCommands = junctionSessions.flatMap((s) =>
     s.commands.filter((c) => c.junction_id === junctionId),
   );
+  // Per-junction live state (contract §5): device health + latest telemetry
+  // state; telemetry without a "state" key renders "Unknown".
+  const junctionState = live.data?.junction_states[junctionId] ?? null;
 
   // ---- Override console ----
   const [reason, setReason] = useState("");
   const [reasonError, setReasonError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionLog, setActionLog] = useState<
-    { title: string; meta: string; tone: "green" | "red" | "blue" | "neutral" }[]
+    {
+      title: string;
+      meta: string;
+      delivery: string | null;
+      release: string | null;
+      tone: "green" | "red" | "blue" | "neutral";
+    }[]
   >([]);
 
   const overrideMut = useMutation({
@@ -138,12 +159,29 @@ export function PoliceJunctionLivePage() {
       setActionError(null);
       setReasonError(null);
       setReason("");
+      // Truthful result rendering (contract §6): action + message + command
+      // identity + delivery status. PENDING delivery = published, awaiting the
+      // device acknowledgement — NOT a confirmed signal change.
+      const delivery = result.delivery?.status ?? result.command?.status ?? "";
+      const tone: "green" | "red" | "blue" | "neutral" =
+        delivery === "ACKNOWLEDGED"
+          ? "green"
+          : delivery === "PUBLISH_FAILED"
+            ? "red"
+            : "blue";
       setActionLog((prev) =>
         [
           {
-            title: `${result.action} → ${result.command.type} (${result.command.status})`,
-            meta: `${fmtDateTime(new Date().toISOString())} · correlation ${result.command.correlation_id}`,
-            tone: "green" as const,
+            title: `${result.action} — ${result.message || result.command?.type || "no command issued"}`,
+            meta:
+              result.command
+                ? `attempt ${result.command.attempt} · ${result.command.status} · correlation ${result.command.correlation_id}`
+                : "no command was issued for this action",
+            delivery: result.delivery?.status ?? null,
+            release: result.release
+              ? `Release published (attempt ${result.release.attempt}) — pending until the device acknowledges.`
+              : null,
+            tone,
           },
           ...prev,
         ].slice(0, 8),
@@ -154,7 +192,9 @@ export function PoliceJunctionLivePage() {
     onError: (err) => {
       setActionError(
         err instanceof ApiError
-          ? err.message
+          ? err.code !== "REQUEST_FAILED" && err.code !== "UNKNOWN"
+            ? `${err.code} — ${err.message}`
+            : err.message
           : "Override failed — please try again.",
       );
     },
@@ -213,8 +253,58 @@ export function PoliceJunctionLivePage() {
             />
           </div>
 
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 10,
+              flexWrap: "wrap",
+            }}
+          >
+            {live.data && (
+              <Txt muted>observed {fmtRelative(live.data.observed_at)}</Txt>
+            )}
+            <FreshnessCaption updatedAt={live.dataUpdatedAt} />
+          </div>
+          <StaleBanner stale={stale} />
+          {live.error && (
+            <InlineError
+              error={live.error}
+              fallback="Could not refresh live sessions — showing the last loaded data."
+            />
+          )}
+
           {junction === null ? null : (
             <>
+              {junctionState && (
+                <Card
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <Txt style={{ fontWeight: 700 }}>{junction.name}</Txt>
+                  <Badge
+                    label={junctionState.online ? "DEVICE ONLINE" : "DEVICE OFFLINE"}
+                    tone={junctionState.online ? "green" : "red"}
+                  />
+                  <Txt muted style={{ fontSize: 12 }}>
+                    last seen {fmtRelative(junctionState.last_seen_at)}
+                  </Txt>
+                  {/* Contract §5: telemetry without a state key → "Unknown". */}
+                  <Badge
+                    label={junctionState.state ?? "Unknown"}
+                    tone={
+                      junctionState.state
+                        ? statusBadgeTone(junctionState.state)
+                        : "neutral"
+                    }
+                  />
+                </Card>
+              )}
               <MapView
                 ariaLabel={`Live map of ${junction.name}`}
                 dots={dots}
@@ -271,11 +361,20 @@ export function PoliceJunctionLivePage() {
                   <Timeline
                     items={actionLog.map((entry) => ({
                       title: entry.title,
-                      meta: entry.meta,
+                      meta:
+                        entry.meta +
+                        (entry.delivery
+                          ? ` · delivery ${entry.delivery.toLowerCase()}`
+                          : "") +
+                        (entry.release ? ` · ${entry.release}` : ""),
                       tone: entry.tone,
                     }))}
                   />
                 )}
+                <Txt muted>
+                  Acknowledged means the junction device received the command —
+                  it does not confirm the signal itself changed.
+                </Txt>
               </Card>
 
               <SectionTitle>Telemetry</SectionTitle>

@@ -57,6 +57,19 @@ def create_refresh_token(sub: str, version: int = 0) -> str:
     )
 
 
+def create_portal_access_token(sub: str, session_id: str) -> str:
+    """Short-lived dashboard access token bound to a PortalSession row.
+
+    The `sid` claim lets get_current_user reject tokens whose portal session
+    was revoked (logout / password change / account disable) before expiry.
+    """
+    s = get_settings()
+    return _encode(
+        {"sub": sub, "sid": str(session_id), "type": "access"},
+        timedelta(minutes=s.PORTAL_ACCESS_TOKEN_MINUTES),
+    )
+
+
 def decode_token(token: str) -> dict:
     """Decode + verify signature/expiry/iss/aud. Raises Unauthorized on any failure."""
     from app.core.exceptions import Unauthorized
