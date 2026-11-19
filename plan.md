@@ -1,3 +1,143 @@
+# SeedGrant Ola Maps Implementation Plan
+
+## 1. Scope and acceptance
+
+Replace the embedded map basemaps in `admin/` and the basemap, hospital route, distance, and ETA in the Expo driver app in `client/`. Use the FastAPI service in `server/` for Ola Maps requests. The mobile map must work in Expo Go on SDK 57 and in the Expo browser preview.
+
+- **Admin portal.** Render Ola behind live ambulance and junction markers on Admin Live Map, its session drawer, Hospital Live Tracking, and Police Junction Live. Use the role-filtered GPS, command, and junction feeds that already power those views.
+- **Driver app.** Draw the route to the recorded destination hospital on the Home card and route sheet. Display driving distance and ETA from Ola. The external directions and SMS location actions use their existing OpenStreetMap links.
+- **Emergency operations.** Use Ola outputs for display. Continue to drive emergency state and junction priority from the existing GPS and geofence pipeline. Exercise that pipeline with Ola down as part of acceptance.
+- **Reference implementation.** Read `/home/balarakeshg16/Documents/Projects/delivery/server/src/adapters/maps/ola.ts`, its `config.ts`, and `scripts/maps-ola-smoke.ts`. Adapt the fixed provider origin, timeouts, response checks, request IDs, and secret handling to the Python service. Use SeedGrant's own Ola credentials.
+
+## 2. Implementation order and agent ownership
+
+1. Have the lead confirm the contracts in §4 and give all agents the same two fixtures. Use a successful directions response with a three-point polyline and a minimal MapLibre style with a relay-backed source. Use the public coordinates in §4 for fixtures and smokes.
+2. Assign three parallel subagents separate working paths. The backend agent owns `server/` and the API and provider tests. The admin agent owns `admin/` and its browser tests. The Expo agent owns `client/` and its browser tests. The two frontend agents can start against contract fixtures while the backend agent builds the endpoints.
+3. Have the lead handle any cross-project changes, review the combined diff, wire both frontends to the actual backend contract, run the integration checks, and collect the live smoke results. The lead coordinates changes to shared CI or deployment configuration when a concrete integration requirement calls for them.
+
+## 3. Configuration and rollout switch
+
+Use the ignored `server/.env` as the local source for Ola and Supabase credentials. Verify it is ignored with `git check-ignore server/.env` before writing it. Add these names to `server/.env.example` with blank credential placeholders.
+
+| Setting | Value and use |
+| --- | --- |
+| `OLA_MAPS_PROJECT_ID` | Project ID from the supplied Ola credentials. |
+| `OLA_MAPS_API_KEY` | Server key used for directions, style, and asset requests. |
+| `OLA_MAPS_CLIENT_ID` | OAuth client ID from the supplied credentials. |
+| `OLA_MAPS_CLIENT_SECRET` | OAuth client secret from the supplied credentials. |
+| `OLA_MAPS_ENABLED` | Default `false`. Set `true` for an authorized integration environment with a working server key. |
+
+- Use the screenshot from the implementation conversation or values already provisioned in `server/.env`. If neither is accessible, finish the code and tests with fixtures and report the live Ola smoke as pending credentials. The OAuth values are stored for the project. The API key is sufficient for the chosen integration. [Ola authentication docs](https://maps.olakrutrim.com/docs/auth)
+- Model the API key and OAuth secret as `SecretStr` settings. Keep real values in the local ignored file and the backend's deployment secrets. The frontend configuration continues to point to SeedGrant through `VITE_API_URL` and `EXPO_PUBLIC_API_URL`.
+- With maps disabled or a key missing, the map endpoints return `503 MAPS_UNAVAILABLE`. Allow FastAPI to start and serve its core endpoints. Use the existing isolated demo harness with test fixtures for map requests. The Supabase schema and Alembic revision already support the source data for these maps.
+
+## 4. FastAPI contracts and Ola adapter
+
+Register the map router under `/api/v1/maps` in `server/app/main.py`. Use the existing dependencies in `server/app/core/dependencies.py` for user and role checks and the existing success and error envelopes for JSON APIs. Keep provider request handling in one adapter using `httpx` and make its transport injectable for tests.
+
+### Directions
+
+`POST /api/v1/maps/directions` requires an authenticated `DRIVER` through the existing bearer token flow. The request contains these two WGS84 points.
+
+```json
+{
+  "origin": { "latitude": 16.5058, "longitude": 80.6520 },
+  "destination": { "latitude": 16.5193, "longitude": 80.6305 }
+}
+```
+
+- Require finite numeric latitude and longitude in the legal ranges. Reject unset `(0, 0)` points. Use a validation response that gives a field and error type without echoing coordinate values. The current validation logger includes input values by default, so ensure the maps path omits them from logs.
+- Send `POST https://api.olamaps.io/routing/v1/directions` with `origin` and `destination` formatted as `lat,lng`, `mode=driving`, `overview=full`, `steps=false`, and `alternatives=false`. Attach the configured `api_key` and a request ID server-side. Forward coordinates and routing options to Ola. [Ola API reference](https://maps.olakrutrim.com/apidocs)
+- Normalize the primary route. Sum the legs' distance in meters and duration in seconds. Decode `overview_polyline` into ordered `{latitude, longitude}` points and validate the result. Check the precision, status values, and units against the Ola schema and smoke response. A documented no-route response has HTTP 200 with `{"success":true,"data":null}`.
+- Use the existing `401`, `403`, and `422` outcomes for missing auth, a wrong role, and invalid input. Use `429 RATE_LIMITED` for a local limit and `503 MAPS_UNAVAILABLE` for disabled maps, an upstream quota response, timeout, rejection, or invalid provider response. Return a short error message suitable for the UI.
+
+Example success fixture with synthetic distance and duration.
+
+```json
+{
+  "success": true,
+  "data": {
+    "polyline": [
+      { "latitude": 16.5058, "longitude": 80.6520 },
+      { "latitude": 16.5140, "longitude": 80.6422 },
+      { "latitude": 16.5193, "longitude": 80.6305 }
+    ],
+    "distance_m": 4500,
+    "duration_s": 720
+  }
+}
+```
+
+### Style and assets
+
+`GET /api/v1/maps/style` accepts signed-in `ADMIN`, `HOSPITAL`, `POLICE`, and `DRIVER` users. Return `data: { style, asset_token, expires_at }`, where `style` is a MapLibre style object and `expires_at` is an ISO 8601 UTC timestamp. Send `Cache-Control: no-store` on the grant response.
+
+- Fetch the published `default-light-standard` Ola style through FastAPI. Verify the source, tile, font, and sprite resource paths against the live style when preparing fixtures. Rewrite their URL fields and any nested TileJSON tile templates to `/api/v1/maps/assets/...`. Preserve tile placeholders such as `{z}`, `{x}`, and `{y}`, sprite suffixes, and attribution. Resolve rewritten paths against the configured SeedGrant API base in each frontend. [Ola style setup](https://maps.olakrutrim.com/docs/sdks/web-sdk/latest/setup)
+- Issue a five-minute signed bearer token with type `map-assets` and a user subject, using the existing JWT signing and verification code. Require this token type for `GET /api/v1/maps/assets/{resource_path:path}`. The session token grants access to the style endpoint and the scoped token grants access to map assets. Asset requests can verify the grant without a Supabase round trip for every tile.
+- Build asset upstream requests from explicit, fixed Ola resource patterns. Validate each resource type and coordinate or filename parameter. Resolve to a verified Ola HTTPS host and vetted path. Reject arbitrary targets, unexpected path segments, and redirects. Apply the server key only to approved upstream requests. Stream or bound the response, preserve the correct media type, and keep the encoding header consistent with the returned bytes.
+- In both renderers, attach the scoped bearer only to the configured SeedGrant asset path. Refresh the grant through the existing authenticated request client one minute before expiration while the map is mounted. Update the renderer's token without remounting or resetting its view. Clear map state on logout and show a recoverable message if a grant or style cannot load.
+
+### Provider reliability and privacy
+
+- Use a three-second total directions deadline and a five-second style and asset deadline, including any retry. Allow one retry inside that deadline for a transient transport failure or upstream `5xx`. On an upstream `429`, honor `Retry-After` when supplied and let the caller recover without an immediate repeat.
+- Start with per-user limits of 6 directions and 12 style requests per minute. Allow normal tile bursts and cap in-flight upstream asset requests at 8 per process, with a separate budget from directions. Keep the limits in the maps layer and document them in the backend setup notes.
+- Log operation, elapsed time, outcome, and request ID. Suppress HTTPX request URL logging for Ola calls because query strings contain the API key and precise coordinates. Keep provider response bodies, credentials, bearer tokens, and precise location data out of errors and diagnostics.
+
+## 5. Admin web
+
+1. Add `maplibre-gl` `5.24.1` and `@maplibre/maplibre-gl-leaflet` `0.1.4` to `admin/` and its lockfile. Lazy-load the base layer with the map views. Use one shared component to mount and dispose the MapLibre layer through Leaflet and show loading, error, and retry states. [MapLibre Leaflet adapter](https://github.com/maplibre/maplibre-gl-leaflet)
+2. Replace the raster `TileLayerGuard` usages in the shared `MapView` and in both maps in `LiveMapPage`. Fetch the style through the portal's existing authenticated request service. Use React Query to share one in-memory style and grant renewal loop between the main map and drawer within the portal session.
+3. Keep the Leaflet overlays and existing role queries as the source of the operational map. Verify marker colors and popups, marker-to-drawer selection, selected junction centering, GPS timestamps, stale-state indicators, and polling. On style, tile, or WebGL failure, show the reason in the map area while presenting the existing lists and any available Leaflet overlays. Expose a retry action and clear the message on recovery.
+4. Use the configured API base for dev and Vercel. Verify same-origin API rewrites and cross-origin requests through the repository's existing origin allowlist when a separate API origin is configured. Remove the old OSM basemap URL helper and `VITE_TILES_URL` lookup after the four views use Ola.
+
+## 6. Expo driver app
+
+1. Read the exact SDK 57 docs required by `client/AGENTS.md`. Install `react-native-webview` using `npx expo install react-native-webview` and pin `maplibre-gl` to `5.24.1`. Expo Go on SDK 57 includes WebView 13.16.1. Use the SDK's WebView for Android and iOS and a platform-specific DOM implementation for the Expo web preview. [Expo SDK 57 WebView docs](https://docs.expo.dev/versions/v57.0.0/sdk/webview/)
+2. Create a bundled local map document for native. Generate the document module from the installed MapLibre UMD JavaScript, stylesheet, and small renderer entry point with a deterministic Node script wired into package installation. Store generated output in an ignored path. Load static HTML with SeedGrant's configured API URL as the base and a policy that limits scripts, asset requests, and navigations to the bundled map and SeedGrant API. Use the compatible worker policy for the pinned MapLibre bundle. [WebView inline HTML reference](https://github.com/react-native-webview/react-native-webview/blob/master/docs/Reference.md#source)
+3. Let the map document announce readiness. Pass validated JSON for the style, scoped token, marker coordinates, and route through the WebView bridge after it is ready. Keep the document stable across GPS and token updates. Route data and credentials belong in memory. Renderers should accept a common `LiveRouteMap` prop contract and use `[longitude, latitude]` for MapLibre geometry. Dispose the map and listeners when their view closes.
+4. In `client/services/routing.ts`, replace direct OSRM fetching with the driver API request wrapper and map `distance_m` and `duration_s` to the existing display types. Add optional `AbortSignal` support through `requestCore` and its retry path, including listener cleanup. Exit promptly on cancellation before retry, refresh, or alert handling. Remove `EXPO_PUBLIC_OSRM_URL`, `EXPO_PUBLIC_TILES_URL`, and the `react-native-maps` dependency after replacing their last callers.
+5. Compute the route once in Home and share it across the card and route sheet. Use a fresh, usable GPS fix and valid coordinates from the existing hospital catalog. Use the API's recorded hospital when restoring a linked active session. The picker sets the next trip's default hospital during an active session. A free-text or unlocated destination can keep its name while showing that a route is unavailable.
+6. Request the first route when the active session, GPS fix, and destination are ready. Refresh at most once per 30 seconds within the same session and destination. Trigger a new request immediately when a new session or effective destination becomes ready. Cancel superseded requests and ignore late results. Clear the ETA and route when the session ends, the fix becomes stale, or the provider returns no usable route.
+7. Draw the decoded route and real ambulance and hospital markers. Fit the camera on first successful route and on destination change. Update marker and route data as it arrives so routine GPS updates allow the driver to pan. If basemap rendering fails, show the route status and any available position information. If routing fails, show an unavailable ETA and keep GPS and emergency controls usable. Display traveled GPS distance separately from estimated route distance.
+
+## 7. Verification
+
+**Baseline verified on `638ab25`.** `DATABASE_URL` and `SYNC_DATABASE_URL` each returned `SELECT 1`. The anon and service-role keys each returned HTTP 200 from Supabase Auth settings. The live revision matched `0014_role_varchar_compat` and the relevant tables were present. The existing 164 backend, 32 admin, and 27 client tests passed, along with the client typecheck.
+
+### Isolated automated checks
+
+Set `OLA_MAPS_ENABLED=false` in the default backend test environment. Map tests enable the adapter with an injected mock transport and test-only key. Browser tests intercept map requests or use the local client mock backend.
+
+| Area | Checks and acceptance |
+| --- | --- |
+| Backend provider | Use `httpx.MockTransport` fixtures for a multi-leg route, known decoded coordinates, no route, timeout, `429`, malformed responses, bad upstream authentication, and bounded retry. Assert request parameters and units. Verify that tests can run without provider credentials. |
+| Backend API | Cover endpoint roles, invalid coordinates, grant expiration, wrong bearer scope, rejected asset paths, style and nested TileJSON rewriting, asset content types, disabled mode, and credential and coordinate redaction. Use the in-memory test DB and mocked MQTT. |
+| Admin | Exercise all four views with intercepted style and asset fixtures. Check visible markers, popup/drawer interactions, role scoping, map error and recovery, stale GPS, and independently functioning live lists. |
+| Expo | Cover GPS and destination readiness, response mapping, throttling, superseded responses, aborts, logout and stop cleanup, restored emergency destination, and unavailable ETA. Extend the existing Playwright mock backend with the maps contracts for a Home-card and route-sheet flow. |
+| Emergency regression | Run the existing isolated simulator with map requests disabled or limited to failure fixtures. Verify start, GPS updates, signal-priority request and release, and stop through the same application entry points as normal use. |
+
+Run the repo checks after the agents' changes are integrated.
+
+| Project | Commands |
+| --- | --- |
+| `server/` | `uv sync --locked`, `uv run ruff check app tests`, `uv run mypy app`, `uv run pytest -q`. Run the isolated demo backend with `server/scripts/run_demo.sh` from the repo root for the simulator and portal browser journeys. |
+| `admin/` | `npm ci`, `npm run lint`, `npm test`, `npm run build`, and `npm run test:e2e` with the seeded demo backend running. |
+| `client/` | `npm ci`, `npm run lint`, `npm run typecheck`, `npm run format:check`, `npm test`, `SCREENSHOT_DIR=test-results/screenshots npm run test:e2e`, `npx expo install --check`, and `npm run export:android`. |
+
+### Live, read-only checks
+
+1. Load the existing `server/.env` through the backend settings. Recheck both Supabase database connections with `SELECT 1` and read the Alembic revision in a read-only transaction. Check the anon and service-role keys against the configured project's `GET /auth/v1/settings`. Record statuses and the revision only. Use the isolated demo database for migrations, seeding, and emergency journeys.
+2. Use the Ola key from `server/.env` for a fixed public-coordinate smoke. Fetch the light style, request one vector tile referenced by it, and request a route between public points near Vijayawada such as the coordinates in §4. Confirm tile media type, a decodable polyline, and plausible distance and duration. Output outcomes and request IDs without credentials or full provider URLs.
+3. Run the browser flows in Chromium and smoke the map on a device with the matching Expo Go SDK using `npx expo start --go`. Use a reachable development API and controlled GPS input. Check map labels and attribution, pins, route rendering, zoom and pan, ETA, and recovery after a map request fails. Record which Android and iOS devices were actually tested. An Android bundle export is a build check. Device rendering requires a device or emulator.
+
+## 8. Release handoff
+
+- Record tests that ran, their outcomes, and any live or device checks blocked by unavailable credentials or hardware. Verify the final diff and generated bundles for accidental credential exposure without printing secret values.
+- Release the backward-compatible backend endpoints before frontend builds that depend on them. Use `OLA_MAPS_ENABLED` to stage the rollout and disable provider calls while investigating failures. Observe directions timeouts, rate limits, and style failures through the sanitized logs.
+- Before enabling Ola for live ambulance operations, confirm that SeedGrant's Ola agreement covers advisory ambulance routing and authenticated tile delivery. Use public coordinates for provider smoke tests and isolated data for application journeys. Ola's published terms restrict safety-critical use. [Ola platform terms, section 6](https://maps.olakrutrim.com/legal/terms-and-conditions)
+
+---
+
 # SeedGrant Admin Portal: Detailed Implementation and Test Plan
 
 ## 1. Goal and agreed decisions
